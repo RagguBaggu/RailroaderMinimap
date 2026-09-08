@@ -270,7 +270,7 @@ namespace RailroaderMinimapServer
                 _cachedTrackJson = JsonConvert.SerializeObject(result.Network);
                 SubscribeToSwitchEvents(result.SwitchNodes);
                 SubscribeToSignalEvents(result.Signals);
-                Log.Info($"Cached {result.Network.segments.Count} segments, {result.Network.switches.Count} switches, and {result.Network.signals.Count} signals.");
+                Log.Info($"Cached {result.Network.segments.Count} segments, {result.Network.switches.Count} switches, {result.Network.signals.Count} signals, and {result.Network.areas.Count} areas.");
             }
         }
 

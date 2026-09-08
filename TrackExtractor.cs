@@ -5,6 +5,7 @@ using RailroaderMinimapServer.Data;
 using Helpers; // WorldTransformer.WorldToGame
 using Track;
 using Track.Signals; // CTCSignal, SignalAspect
+using Model.Ops; // Area, OpsController
 
 namespace RailroaderMinimapServer
 {
@@ -138,6 +139,36 @@ namespace RailroaderMinimapServer
                     position = new float[] { pos.x, MapCoordinates.MapZ(pos.z) },
                     aspect = signal.CurrentAspect.ToString()
                 });
+            }
+
+            // 4. EXTRACT AREAS -- yard/industry/interchange zones, the same
+            // regions the base game's own minimap labels. Area is a real
+            // scene MonoBehaviour (not just a lookup key), so it's enumerated
+            // directly via OpsController.Shared.Areas rather than resolved
+            // per-car the way destination coloring does.
+            OpsController opsController = OpsController.Shared;
+            if (opsController != null)
+            {
+                foreach (var area in opsController.Areas)
+                {
+                    if (area == null) continue;
+
+                    Vector3 pos = WorldTransformer.WorldToGame(area.transform.position);
+                    Color c = area.tagColor;
+                    network.areas.Add(new AreaDto
+                    {
+                        id = !string.IsNullOrEmpty(area.identifier) ? area.identifier : area.name,
+                        name = area.name,
+                        position = new float[] { pos.x, MapCoordinates.MapZ(pos.z) },
+                        radius = area.radius,
+                        color = new int[]
+                        {
+                            Mathf.RoundToInt(Mathf.Clamp01(c.r) * 255f),
+                            Mathf.RoundToInt(Mathf.Clamp01(c.g) * 255f),
+                            Mathf.RoundToInt(Mathf.Clamp01(c.b) * 255f)
+                        }
+                    });
+                }
             }
 
             return new TrackNetworkExtractionResult

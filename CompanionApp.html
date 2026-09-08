@@ -288,6 +288,7 @@
       <div><span class="swatch" style="background:var(--signal-amber); border-radius:50%;"></span>signal — middle lamp lit = Approach</div>
       <div><span class="swatch" style="background:var(--thrown); border-radius:50%;"></span>signal — bottom lamp lit = Stop</div>
       <div style="color:var(--text-dim); font-size:10px;">(diverging aspects share these lamps; Restricting shows lunar white on bottom)</div>
+      <div><span class="swatch" style="background:transparent; border: 1px dashed var(--text-dim); border-radius:50%;"></span>area — yard/industry/interchange name</div>
       <div style="margin-top:4px; color:var(--text-dim); font-style:italic;">tap a car, switch, or signal for details</div>
     </div>
   </div>
@@ -297,6 +298,7 @@
       <div class="label">Segments</div><div class="value" id="statSegments">0</div>
       <div class="label">Switches</div><div class="value" id="statSwitches">0</div>
       <div class="label">Signals</div><div class="value" id="statSignals">0</div>
+      <div class="label">Areas</div><div class="value" id="statAreas">0</div>
       <div class="label">Cars tracked</div><div class="value" id="statCars">0</div>
       <div class="label">Cars loaded / fallback</div><div class="value" id="statCarsLoaded">0 / 0</div>
       <div class="label">Messages received</div><div class="value" id="statMsgCount">0</div>
@@ -358,6 +360,7 @@
   let segments = [];           // [{id, nodeA, nodeB, length, speedLimit, points:[[x,z],...]}]
   const switches = new Map();  // id -> {id, x, z, isThrown, isCTC}
   const signals = new Map();   // id -> {id, x, z, aspect}
+  const areas = new Map();     // id -> {id, name, x, z, radius, color:[r,g,b]}
   const cars = new Map();      // id -> {id, x, z, rotationY, loaded}
 
   // View transform (world -> screen). Starts as the auto-fit transform when
@@ -480,11 +483,16 @@
         for (const sg of (msg.signals || [])) {
           signals.set(sg.id, { id: sg.id, x: sg.position[0], z: sg.position[1], aspect: sg.aspect });
         }
+        areas.clear();
+        for (const a of (msg.areas || [])) {
+          areas.set(a.id, { id: a.id, name: a.name, x: a.position[0], z: a.position[1], radius: a.radius, color: a.color });
+        }
         transform = null; // recompute fit on next draw
         $('statSegments').textContent = segments.length;
         $('statSwitches').textContent = switches.size;
         $('statSignals').textContent = signals.size;
-        log('RECV', `track_network — ${segments.length} segments, ${switches.size} switches, ${signals.size} signals`);
+        $('statAreas').textContent = areas.size;
+        log('RECV', `track_network — ${segments.length} segments, ${switches.size} switches, ${signals.size} signals, ${areas.size} areas`);
         break;
 
       case 'signal_aspect':
@@ -809,6 +817,24 @@
     return car.id || '';
   }
 
+  // Draws a faint dashed outline for a yard/industry/interchange area, in
+  // the area's own tagColor (the same color used for freight destination
+  // coloring) so a car's color visually matches the area it's heading to.
+  // Purely a background/context element -- never intercepts taps, unlike
+  // switches/signals/cars.
+  function drawAreaCircle(sx, sz, screenRadius, color) {
+    if (screenRadius < 4) return; // too small to read as a shape; label alone still renders
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = color;
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(sx, sz, screenRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Draws a railroad switch-stand ("ground throw") symbol: a circular base
   // with an inner lens and a diagonal lever, matching the reference icon.
   // Semi-transparent (rather than solid) so it sits more like an overlay on
@@ -902,6 +928,17 @@
         if (i === 0) ctx.moveTo(sx, sz); else ctx.lineTo(sx, sz);
       }
       ctx.stroke();
+    }
+
+    // Areas -- background context, drawn before switches/signals/cars so
+    // those icons always render on top rather than being buried under a
+    // large area circle.
+    for (const a of areas.values()) {
+      const [sx, sz] = toScreen(a.x, a.z);
+      const screenRadius = a.radius * transform.scale;
+      const color = a.color ? `rgb(${a.color[0]}, ${a.color[1]}, ${a.color[2]})` : cssVar('--text-dim');
+      drawAreaCircle(sx, sz, screenRadius, color);
+      drawLabel(sx, sz, a.name);
     }
 
     // Switches

@@ -20,6 +20,7 @@ namespace RailroaderMinimapServer.Data
         public List<SegmentDto> segments { get; set; } = new List<SegmentDto>();
         public List<SwitchDto> switches { get; set; } = new List<SwitchDto>();
         public List<SignalDto> signals { get; set; } = new List<SignalDto>();
+        public List<AreaDto> areas { get; set; } = new List<AreaDto>();
     }
 
     public class SegmentDto
@@ -86,6 +87,27 @@ namespace RailroaderMinimapServer.Data
         public string type { get; set; } = MessageType.SignalAspectUpdate;
         public string id { get; set; }
         public string aspect { get; set; }
+    }
+
+    // A named freight/industry zone (yard, industry, interchange, etc.) --
+    // the same regions the base game's own minimap labels. Static geometry
+    // sent once as part of the track network cache; areas don't currently
+    // push live updates since their position/extent doesn't change during
+    // a session.
+    public class AreaDto
+    {
+        public string id { get; set; }
+        public string name { get; set; }
+
+        // Each entry is [x, z] in world coordinates, same convention as
+        // SwitchDto/SignalDto positions.
+        public float[] position { get; set; }
+        public float radius { get; set; }
+
+        // [r, g, b] (0-255) -- the same Area.tagColor already used for
+        // freight destination coloring (see CarDataDto.destinationColor),
+        // so an area's label/circle visually matches the cars heading there.
+        public int[] color { get; set; }
     }
 
     public class CarDataDto
