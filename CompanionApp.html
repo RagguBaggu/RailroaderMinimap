@@ -71,7 +71,7 @@
     width: 90px;
     accent-color: var(--accent);
   }
-  #uiScaleValue {
+  .ui-scale-control .value-readout {
     min-width: 34px;
     display: inline-block;
     text-align: right;
@@ -264,7 +264,12 @@
   <span class="ui-scale-control" title="Scale up train labels, popups, and the legend">
     <label for="uiScaleSlider">Text Size</label>
     <input type="range" id="uiScaleSlider" min="1" max="2" step="0.1" value="1">
-    <span id="uiScaleValue">100%</span>
+    <span id="uiScaleValue" class="value-readout">100%</span>
+  </span>
+  <span class="ui-scale-control" title="Scale the area (yard/industry/interchange) name labels">
+    <label for="areaLabelScaleSlider">Area Label Size</label>
+    <input type="range" id="areaLabelScaleSlider" min="0.5" max="3" step="0.1" value="1">
+    <span id="areaLabelScaleValue" class="value-readout">100%</span>
   </span>
   <span style="margin-left:auto; color: var(--text-dim);">
     <span class="status-dot" id="statusDot"></span><span id="statusText">connecting…</span>
@@ -288,7 +293,7 @@
       <div><span class="swatch" style="background:var(--signal-amber); border-radius:50%;"></span>signal — middle lamp lit = Approach</div>
       <div><span class="swatch" style="background:var(--thrown); border-radius:50%;"></span>signal — bottom lamp lit = Stop</div>
       <div style="color:var(--text-dim); font-size:10px;">(diverging aspects share these lamps; Restricting shows lunar white on bottom)</div>
-      <div><span class="swatch" style="background:transparent; border: 1px dashed var(--text-dim); border-radius:50%;"></span>area — yard/industry/interchange name</div>
+      <div style="color:var(--text-dim); font-style:italic;">large text — yard/industry/interchange area name</div>
       <div style="margin-top:4px; color:var(--text-dim); font-style:italic;">tap a car, switch, or signal for details</div>
     </div>
   </div>
@@ -326,6 +331,8 @@
   const pinEnginesBtn = $('pinEnginesBtn');
   const uiScaleSlider = $('uiScaleSlider');
   const uiScaleValue = $('uiScaleValue');
+  const areaLabelScaleSlider = $('areaLabelScaleSlider');
+  const areaLabelScaleValue = $('areaLabelScaleValue');
   const sidePane = $('sidePane');
   const zoomReadout = $('zoomReadout');
   const infoPopupLayer = $('infoPopupLayer');
@@ -376,6 +383,19 @@
     const savedScale = parseFloat(localStorage.getItem('minimapUiScale'));
     if (!isNaN(savedScale) && savedScale >= 1 && savedScale <= 2) {
       uiScale = savedScale;
+    }
+  } catch (e) { /* localStorage unavailable -- fine, just use the default */ }
+
+  // Area name labels get their own independent size control, separate from
+  // uiScale above -- they're meant to read as prominent map labels (like
+  // the base game's own minimap), not small annotations, so their base font
+  // size (see AREA_LABEL_BASE_FONT_PX below) is already much larger than
+  // ordinary train labels before this multiplier is even applied.
+  let areaLabelScale = 1;
+  try {
+    const savedAreaScale = parseFloat(localStorage.getItem('minimapAreaLabelScale'));
+    if (!isNaN(savedAreaScale) && savedAreaScale >= 0.5 && savedAreaScale <= 3) {
+      areaLabelScale = savedAreaScale;
     }
   } catch (e) { /* localStorage unavailable -- fine, just use the default */ }
   let baseScale = null; // the fit-to-window scale, used to clamp zoom range and compute the % readout
@@ -747,6 +767,13 @@
   const MIN_ICON_HALF_LENGTH = 3;  // px -- keeps icons visible zoomed way out
   const MAX_ICON_HALF_LENGTH = 40; // px -- keeps icons sane zoomed way in
 
+  // Base font size for area (yard/industry/interchange) name labels, before
+  // the Area Label Size slider's areaLabelScale multiplier is applied --
+  // deliberately much larger than the 10px train-label base so area names
+  // read as prominent map labels by default, closer to the base game's own
+  // minimap treatment.
+  const AREA_LABEL_BASE_FONT_PX = 20;
+
   function clamp(v, min, max) {
     return Math.max(min, Math.min(v, max));
   }
@@ -817,24 +844,6 @@
     return car.id || '';
   }
 
-  // Draws a faint dashed outline for a yard/industry/interchange area, in
-  // the area's own tagColor (the same color used for freight destination
-  // coloring) so a car's color visually matches the area it's heading to.
-  // Purely a background/context element -- never intercepts taps, unlike
-  // switches/signals/cars.
-  function drawAreaCircle(sx, sz, screenRadius, color) {
-    if (screenRadius < 4) return; // too small to read as a shape; label alone still renders
-    ctx.save();
-    ctx.globalAlpha = 0.35;
-    ctx.strokeStyle = color;
-    ctx.setLineDash([4, 4]);
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(sx, sz, screenRadius, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
-
   // Draws a railroad switch-stand ("ground throw") symbol: a circular base
   // with an inner lens and a diagonal lever, matching the reference icon.
   // Semi-transparent (rather than solid) so it sits more like an overlay on
@@ -878,17 +887,18 @@
   }
 
   // Draws upright text (never rotated, regardless of the icon's heading) on
-  // a small dark pill, anchored below a given screen point.
-  function drawLabel(sx, sz, text) {
+  // a small dark pill, anchored below a given screen point. fontPx defaults
+  // to the ordinary train-label size (scaled by uiScale); callers that need
+  // a different size (e.g. area labels) pass their own.
+  function drawLabel(sx, sz, text, fontPx = 10 * uiScale) {
     if (!text) return;
     ctx.save();
-    const fontPx = 10 * uiScale;
     ctx.font = `${fontPx}px "JetBrains Mono", monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const metrics = ctx.measureText(text);
-    const w = metrics.width + 8 * uiScale;
-    const h = 14 * uiScale;
+    const w = metrics.width + fontPx * 0.8;
+    const h = fontPx * 1.4;
     ctx.fillStyle = 'rgba(11, 18, 16, 0.8)';
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
     ctx.lineWidth = 1;
@@ -928,17 +938,6 @@
         if (i === 0) ctx.moveTo(sx, sz); else ctx.lineTo(sx, sz);
       }
       ctx.stroke();
-    }
-
-    // Areas -- background context, drawn before switches/signals/cars so
-    // those icons always render on top rather than being buried under a
-    // large area circle.
-    for (const a of areas.values()) {
-      const [sx, sz] = toScreen(a.x, a.z);
-      const screenRadius = a.radius * transform.scale;
-      const color = a.color ? `rgb(${a.color[0]}, ${a.color[1]}, ${a.color[2]})` : cssVar('--text-dim');
-      drawAreaCircle(sx, sz, screenRadius, color);
-      drawLabel(sx, sz, a.name);
     }
 
     // Switches
@@ -992,6 +991,14 @@
       if (rc.car.isLocomotive) {
         drawLabel(rc.sx, rc.sz + 16, shortCarLabel(rc.car));
       }
+    }
+
+    // Area (yard/industry/interchange) name labels -- drawn last, after
+    // every other icon/label, so they always render on top instead of
+    // potentially being buried under track/switch/signal/car icons.
+    for (const a of areas.values()) {
+      const [sx, sz] = toScreen(a.x, a.z);
+      drawLabel(sx, sz, a.name, AREA_LABEL_BASE_FONT_PX * areaLabelScale);
     }
 
     updatePinnedPopups();
@@ -1388,6 +1395,23 @@
     applyUiScale(scale);
     try {
       localStorage.setItem('minimapUiScale', String(scale));
+    } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
+  });
+
+  function applyAreaLabelScale(scale) {
+    areaLabelScale = scale;
+    areaLabelScaleValue.textContent = Math.round(scale * 100) + '%';
+    draw(); // canvas-drawn labels need an explicit redraw
+  }
+
+  areaLabelScaleSlider.value = String(areaLabelScale);
+  applyAreaLabelScale(areaLabelScale);
+
+  areaLabelScaleSlider.addEventListener('input', () => {
+    const scale = parseFloat(areaLabelScaleSlider.value);
+    applyAreaLabelScale(scale);
+    try {
+      localStorage.setItem('minimapAreaLabelScale', String(scale));
     } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
   });
 
