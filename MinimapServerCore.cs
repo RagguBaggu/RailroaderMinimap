@@ -34,7 +34,7 @@ namespace RailroaderMinimapServer
     {
         public const string PluginGuid = "com.community.railroader.minimap";
         public const string PluginName = "Railroader Minimap Server";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "0.8.0";
 
         private const int HttpPort = 8080;
         private const int WsPort = 8081;
