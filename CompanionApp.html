@@ -1,0 +1,1380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Railroader Minimap</title>
+<style>
+  :root {
+    --ui-scale: 1;
+    --bg: #0b1210;
+    --panel: #121b18;
+    --panel-line: #24322c;
+    --track: #3c4c45;
+    --text: #d9e3dd;
+    --text-dim: #7d938a;
+    --live: #4ade80;
+    --fallback: #f5a524;
+    --thrown: #ef4444;
+    --clear: #7d938a;
+    --accent: #57e0c4;
+    --special-white: #f2f2ee;
+    --signal-amber: #f5a524;
+    --signal-lunar: #cfd6d2;
+    --freight-idle: #8a978f;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 13px;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--panel-line);
+    flex-wrap: wrap;
+  }
+
+  header .title {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--accent);
+    margin-right: 8px;
+    white-space: nowrap;
+  }
+
+  .ui-scale-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-dim);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .ui-scale-control input[type="range"] {
+    width: 90px;
+    accent-color: var(--accent);
+  }
+  #uiScaleValue {
+    min-width: 34px;
+    display: inline-block;
+    text-align: right;
+  }
+
+  input[type="text"] {
+    background: var(--bg);
+    border: 1px solid var(--panel-line);
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 12px;
+    width: 240px;
+  }
+
+  button {
+    background: var(--bg);
+    border: 1px solid var(--panel-line);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--clear);
+    display: inline-block;
+    margin-right: 6px;
+  }
+  .status-dot.connected { background: var(--live); }
+  .status-dot.error { background: var(--thrown); }
+
+  main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  .map-pane {
+    flex: 1;
+    position: relative;
+    background: var(--bg);
+    border-right: 1px solid var(--panel-line);
+  }
+
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  canvas.grabbing { cursor: grabbing; }
+
+  .zoom-readout {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    background: rgba(18, 27, 24, 0.85);
+    border: 1px solid var(--panel-line);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+    pointer-events: none;
+  }
+
+  .info-popup-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .info-popup {
+    position: absolute;
+    min-width: 160px;
+    max-width: 240px;
+    background: rgba(15, 22, 20, 0.95);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: calc(12px * var(--ui-scale));
+    line-height: 1.6;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    z-index: 5;
+    animation: popIn 0.12s ease-out;
+  }
+  @keyframes popIn {
+    from { opacity: 0; transform: translateY(4px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .info-popup .title {
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 4px;
+    letter-spacing: 0.02em;
+  }
+  .info-popup .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text);
+  }
+  .info-popup .row .k { color: var(--text-dim); }
+  .info-popup .status-thrown { color: var(--thrown); }
+  .info-popup .status-normal { color: var(--clear); }
+
+  .legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    background: rgba(18, 27, 24, 0.85);
+    border: 1px solid var(--panel-line);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: calc(11px * var(--ui-scale));
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+  .legend .swatch {
+    display: inline-block;
+    width: calc(9px * var(--ui-scale)); height: calc(9px * var(--ui-scale));
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+
+  .side-pane {
+    width: 340px;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+  }
+  .side-pane.hidden { display: none; }
+
+  .stats {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--panel-line);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 10px;
+    font-size: 12px;
+  }
+  .stats .label { color: var(--text-dim); }
+  .stats .value { color: var(--text); text-align: right; }
+
+  .log-header {
+    padding: 8px 14px;
+    color: var(--text-dim);
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--panel-line);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 14px;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+
+  .log .entry { white-space: pre-wrap; word-break: break-all; margin-bottom: 6px; }
+  .log .entry .tag { color: var(--accent); }
+  .log .entry.err .tag { color: var(--thrown); }
+  .log .entry .time { color: var(--text-dim); margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title">RAILROADER MINIMAP</span>
+  <button id="connectBtn">Reconnect</button>
+  <button id="trackBtn" disabled>Refresh Track Data</button>
+  <button id="flipXBtn">Flip X</button>
+  <button id="flipZBtn">Flip Z</button>
+  <button id="zoomInBtn">Zoom In</button>
+  <button id="zoomOutBtn">Zoom Out</button>
+  <button id="resetViewBtn">Reset View</button>
+  <button id="pinEnginesBtn">Pin Engine Info</button>
+  <button id="diagBtn">Diagnostics</button>
+  <span class="ui-scale-control" title="Scale up train labels, popups, and the legend">
+    <label for="uiScaleSlider">Text Size</label>
+    <input type="range" id="uiScaleSlider" min="1" max="2" step="0.1" value="1">
+    <span id="uiScaleValue">100%</span>
+  </span>
+  <span style="margin-left:auto; color: var(--text-dim);">
+    <span class="status-dot" id="statusDot"></span><span id="statusText">connecting…</span>
+  </span>
+</header>
+
+<main>
+  <div class="map-pane">
+    <canvas id="map"></canvas>
+    <div class="zoom-readout" id="zoomReadout">100%</div>
+    <div class="info-popup-layer" id="infoPopupLayer"></div>
+    <div class="legend">
+      <div><span class="swatch" style="background:var(--track); border-radius:0; width:14px; height:2px;"></span>track segment</div>
+      <div><span class="swatch" style="background:var(--special-white); border-radius:2px; clip-path: polygon(50% 0%, 100% 35%, 100% 100%, 0% 100%, 0% 35%);"></span>engine / tender</div>
+      <div><span class="swatch" style="background:var(--special-white); border-radius:1px;"></span>passenger car</div>
+      <div><span class="swatch" style="background:linear-gradient(90deg, #e07a5f, #81b29a); border-radius:1px;"></span>freight — vivid = en route, dim = arrived</div>
+      <div><span class="swatch" style="background:var(--freight-idle); border-radius:1px;"></span>freight — no active destination</div>
+      <div><span class="swatch" style="background:var(--live); border-radius:50%; opacity:0.72;"></span>switch — normal (label "CTC" if signal-equipped)</div>
+      <div><span class="swatch" style="background:var(--thrown); border-radius:50%; opacity:0.72;"></span>switch — reversed</div>
+      <div><span class="swatch" style="background:var(--live); border-radius:50%;"></span>signal — top lamp lit = Clear</div>
+      <div><span class="swatch" style="background:var(--signal-amber); border-radius:50%;"></span>signal — middle lamp lit = Approach</div>
+      <div><span class="swatch" style="background:var(--thrown); border-radius:50%;"></span>signal — bottom lamp lit = Stop</div>
+      <div style="color:var(--text-dim); font-size:10px;">(diverging aspects share these lamps; Restricting shows lunar white on bottom)</div>
+      <div style="margin-top:4px; color:var(--text-dim); font-style:italic;">tap a car, switch, or signal for details</div>
+    </div>
+  </div>
+
+  <div class="side-pane hidden" id="sidePane">
+    <div class="stats">
+      <div class="label">Segments</div><div class="value" id="statSegments">0</div>
+      <div class="label">Switches</div><div class="value" id="statSwitches">0</div>
+      <div class="label">Signals</div><div class="value" id="statSignals">0</div>
+      <div class="label">Cars tracked</div><div class="value" id="statCars">0</div>
+      <div class="label">Cars loaded / fallback</div><div class="value" id="statCarsLoaded">0 / 0</div>
+      <div class="label">Messages received</div><div class="value" id="statMsgCount">0</div>
+      <div class="label">Live-state rate</div><div class="value" id="statRate">0 / s</div>
+    </div>
+    <div class="log-header">
+      <span>MESSAGE LOG</span>
+      <button id="clearLogBtn" style="padding:2px 8px; font-size:10px;">Clear</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+</main>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const connectBtn = $('connectBtn');
+  const trackBtn = $('trackBtn');
+  const flipXBtn = $('flipXBtn');
+  const flipZBtn = $('flipZBtn');
+  const zoomInBtn = $('zoomInBtn');
+  const zoomOutBtn = $('zoomOutBtn');
+  const resetViewBtn = $('resetViewBtn');
+  const diagBtn = $('diagBtn');
+  const pinEnginesBtn = $('pinEnginesBtn');
+  const uiScaleSlider = $('uiScaleSlider');
+  const uiScaleValue = $('uiScaleValue');
+  const sidePane = $('sidePane');
+  const zoomReadout = $('zoomReadout');
+  const infoPopupLayer = $('infoPopupLayer');
+  const clearLogBtn = $('clearLogBtn');
+  const statusDot = $('statusDot');
+  const statusText = $('statusText');
+  const logEl = $('log');
+  const canvas = $('map');
+  const ctx = canvas.getContext('2d');
+
+  // This page is served by the mod's own HTTP server, on the same host and
+  // port as the WebSocket endpoint -- so the connection URL never needs to
+  // be typed in manually, whether this is opened as http://localhost:8080/
+  // on the same PC or http://<lan-ip>:8080/ from another device.
+  // The WebSocket endpoint runs on a separate port from this page (see
+  // MinimapServerPlugin.WsPort) -- WebSocketSharp's combined HTTP+WS server
+  // has a known static-content bug, so the mod runs two listeners: plain
+  // HttpListener serving this page, and WebSocketSharp serving /ws.
+  const WS_PORT = 8081;
+  const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':' + WS_PORT + '/ws/';
+
+  let ws = null;
+  let msgCount = 0;
+  let logShown = 0;
+  let manualReconnectPending = false;
+  const MAX_LOG_ENTRIES = 300;
+
+  // Rolling window for live_state rate calculation
+  let liveStateTimestamps = [];
+
+  // World state
+  let segments = [];           // [{id, nodeA, nodeB, length, speedLimit, points:[[x,z],...]}]
+  const switches = new Map();  // id -> {id, x, z, isThrown, isCTC}
+  const signals = new Map();   // id -> {id, x, z, aspect}
+  const cars = new Map();      // id -> {id, x, z, rotationY, loaded}
+
+  // View transform (world -> screen). Starts as the auto-fit transform when
+  // track data arrives, then zoom/pan mutate it directly in place.
+  let transform = null; // {scale, offsetX, offsetY}
+
+  // Text size slider -- scales train labels (canvas-drawn, via drawLabel's
+  // font size below), popups, and the legend (both DOM, via the --ui-scale
+  // CSS variable). Persisted across reloads since it's a personal
+  // readability preference, not something tied to a specific session.
+  let uiScale = 1;
+  try {
+    const savedScale = parseFloat(localStorage.getItem('minimapUiScale'));
+    if (!isNaN(savedScale) && savedScale >= 1 && savedScale <= 2) {
+      uiScale = savedScale;
+    }
+  } catch (e) { /* localStorage unavailable -- fine, just use the default */ }
+  let baseScale = null; // the fit-to-window scale, used to clamp zoom range and compute the % readout
+
+  function setStatus(state, text) {
+    statusDot.className = 'status-dot' + (state ? ' ' + state : '');
+    statusText.textContent = text;
+  }
+
+  function log(tag, text, isErr) {
+    const entry = document.createElement('div');
+    entry.className = 'entry' + (isErr ? ' err' : '');
+    const time = new Date().toLocaleTimeString();
+    entry.innerHTML = `<span class="time">${time}</span><span class="tag">[${tag}]</span> ${text}`;
+    logEl.appendChild(entry);
+    logShown++;
+    if (logShown > MAX_LOG_ENTRIES) {
+      logEl.removeChild(logEl.firstChild);
+      logShown--;
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function truncate(str, n) {
+    return str.length > n ? str.slice(0, n) + '…' : str;
+  }
+
+  function connect() {
+    setStatus('', 'connecting…');
+    connectBtn.disabled = true;
+
+    try {
+      ws = new WebSocket(WS_URL);
+    } catch (e) {
+      setStatus('error', 'connection failed');
+      connectBtn.disabled = false;
+      log('ERROR', e.message, true);
+      return;
+    }
+
+    ws.onopen = () => {
+      setStatus('connected', 'connected');
+      connectBtn.disabled = false;
+      trackBtn.disabled = false;
+      log('OPEN', WS_URL);
+      // Auto-request track geometry as soon as we connect
+      ws.send('GET_TRACK_DATA');
+      log('SEND', 'GET_TRACK_DATA');
+    };
+
+    ws.onclose = (ev) => {
+      setStatus('', 'disconnected — retrying…');
+      connectBtn.disabled = false;
+      trackBtn.disabled = true;
+      log('CLOSE', `code=${ev.code}`, ev.code !== 1000);
+      // The game process may restart or briefly hiccup -- keep trying
+      // rather than leaving the companion app permanently disconnected.
+      // A manual reconnect click skips the wait.
+      const delay = manualReconnectPending ? 0 : 3000;
+      manualReconnectPending = false;
+      setTimeout(connect, delay);
+    };
+
+    ws.onerror = () => {
+      setStatus('error', 'error');
+      log('ERROR', 'WebSocket error (see browser console)', true);
+    };
+
+    ws.onmessage = (ev) => {
+      msgCount++;
+      $('statMsgCount').textContent = msgCount;
+      handleMessage(ev.data);
+    };
+  }
+
+  function reconnectNow() {
+    manualReconnectPending = true;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      ws.close(1000, 'manual reconnect');
+    } else {
+      manualReconnectPending = false;
+      connect();
+    }
+  }
+
+  function handleMessage(raw) {
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch (e) {
+      log('PARSE ERR', truncate(raw, 200), true);
+      return;
+    }
+
+    const type = msg.type || '(no type field)';
+
+    switch (msg.type) {
+      case 'track_network':
+        segments = msg.segments || [];
+        switches.clear();
+        for (const s of (msg.switches || [])) {
+          switches.set(s.id, { id: s.id, x: s.position[0], z: s.position[1], isThrown: s.isThrown, isCTC: !!s.isCTC });
+        }
+        signals.clear();
+        for (const sg of (msg.signals || [])) {
+          signals.set(sg.id, { id: sg.id, x: sg.position[0], z: sg.position[1], aspect: sg.aspect });
+        }
+        transform = null; // recompute fit on next draw
+        $('statSegments').textContent = segments.length;
+        $('statSwitches').textContent = switches.size;
+        $('statSignals').textContent = signals.size;
+        log('RECV', `track_network — ${segments.length} segments, ${switches.size} switches, ${signals.size} signals`);
+        break;
+
+      case 'signal_aspect':
+        if (signals.has(msg.id)) {
+          signals.get(msg.id).aspect = msg.aspect;
+        }
+        log('RECV', `signal_aspect — ${msg.id} → ${msg.aspect}`);
+        break;
+
+      case 'live_state':
+        liveStateTimestamps.push(performance.now());
+        liveStateTimestamps = liveStateTimestamps.filter(t => performance.now() - t < 2000);
+
+        // Each broadcast is a full snapshot of every currently-tracked car,
+        // not a delta -- anything missing from it has genuinely stopped
+        // existing (decoupled, despawned, or a different save entirely was
+        // loaded without a page reload). Sync the local set to match rather
+        // than only ever adding to it.
+        const seenCarIds = new Set();
+        for (const c of (msg.rollingStock || [])) {
+          cars.set(c.id, c);
+          seenCarIds.add(c.id);
+        }
+        for (const id of Array.from(cars.keys())) {
+          if (!seenCarIds.has(id)) cars.delete(id);
+        }
+
+        updateCarStats();
+        break;
+
+      case 'switch_state':
+        if (switches.has(msg.id)) {
+          switches.get(msg.id).isThrown = msg.isThrown;
+        } else {
+          switches.set(msg.id, { id: msg.id, x: null, z: null, isThrown: msg.isThrown, isCTC: false });
+        }
+        log('RECV', `switch_state — ${msg.id} → ${msg.isThrown ? 'REVERSED' : 'normal'}`);
+        break;
+
+      default:
+        log('RECV', `unrecognized type "${type}": ${truncate(raw, 150)}`, true);
+    }
+
+    requestRedraw();
+  }
+
+  function updateCarStats() {
+    $('statCars').textContent = cars.size;
+    let loaded = 0, fallback = 0;
+    for (const c of cars.values()) {
+      if (c.loaded) loaded++; else fallback++;
+    }
+    $('statCarsLoaded').textContent = `${loaded} / ${fallback}`;
+
+    const rateWindowSec = 2;
+    const rate = (liveStateTimestamps.length / rateWindowSec).toFixed(1);
+    $('statRate').textContent = rate + ' / s';
+  }
+
+  // --- Rendering ---
+
+  let redrawQueued = false;
+  function requestRedraw() {
+    if (redrawQueued) return;
+    redrawQueued = true;
+    requestAnimationFrame(() => { redrawQueued = false; draw(); });
+  }
+
+  function resizeCanvas() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width * devicePixelRatio;
+    canvas.height = rect.height * devicePixelRatio;
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    transform = null;
+    draw();
+  }
+
+  // The server sends raw Unity world (x, z) coordinates. Depending on how a
+  // particular map's coordinate system relates to "north-up" on screen, one
+  // or both axes may need flipping to visually match the game's own minimap.
+  // Toggle these with the Flip X / Flip Z buttons and compare against the
+  // in-game minimap to see which combination reads correctly.
+  let flipX = false;
+  let flipZ = false;
+
+  function worldToLocal(x, z) {
+    return [flipX ? -x : x, flipZ ? -z : z];
+  }
+
+  function computeFitTransform() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+
+    for (const seg of segments) {
+      for (const p of seg.points) {
+        const [lx, lz] = worldToLocal(p[0], p[1]);
+        if (lx < minX) minX = lx;
+        if (lx > maxX) maxX = lx;
+        if (lz < minZ) minZ = lz;
+        if (lz > maxZ) maxZ = lz;
+      }
+    }
+
+    if (!isFinite(minX)) {
+      // No track data yet -- fall back to a default window centered on origin
+      minX = -100; maxX = 100; minZ = -100; maxZ = 100;
+    }
+
+    const worldW = Math.max(maxX - minX, 1);
+    const worldH = Math.max(maxZ - minZ, 1);
+    const pad = 40;
+    const scale = Math.min((rect.width - pad * 2) / worldW, (rect.height - pad * 2) / worldH);
+
+    return {
+      scale,
+      offsetX: rect.width / 2 - ((minX + maxX) / 2) * scale,
+      offsetY: rect.height / 2 - ((minZ + maxZ) / 2) * scale
+    };
+  }
+
+  function toScreen(x, z) {
+    const [lx, lz] = worldToLocal(x, z);
+    return [lx * transform.scale + transform.offsetX, lz * transform.scale + transform.offsetY];
+  }
+
+  // Populated each draw() call, used for tap/click hit-testing
+  let renderedCars = [];
+  let renderedSwitches = [];
+  let renderedSignals = [];
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  // Maps Track.Signals.SignalAspect's six real states to colors, matching
+  // standard railroad signaling convention (and the base game's own gizmo
+  // color choices for Stop/Clear/Approach specifically).
+  function signalAspectColor(aspect) {
+    switch (aspect) {
+      case 'Stop': return cssVar('--thrown');
+      case 'Clear':
+      case 'DivergingClear': return cssVar('--live');
+      case 'Approach':
+      case 'DivergingApproach': return cssVar('--signal-amber');
+      case 'Restricting': return cssVar('--signal-lunar');
+      default: return cssVar('--text-dim');
+    }
+  }
+
+  // Standard 3-lamp vertical color-light signal convention: top lamp =
+  // clear/proceed, middle = approach/caution, bottom = stop/restricting.
+  // Only the lamp matching the current aspect lights up; the other two
+  // stay dark, matching a real signal head.
+  function signalLampIndex(aspect) {
+    switch (aspect) {
+      case 'Clear':
+      case 'DivergingClear': return 0;
+      case 'Approach':
+      case 'DivergingApproach': return 1;
+      case 'Stop':
+      case 'Restricting': return 2;
+      default: return -1; // unknown aspect -- nothing lit
+    }
+  }
+
+  // Draws a signal mast: a crossbar cap, three stacked lamp heads (only one
+  // lit per the current aspect), and a pole below -- fixed size, not
+  // rotated, matching how switches are drawn.
+  function drawSignalIcon(sx, sz, aspect) {
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+
+    const lampRadius = 3.2;
+    const lampSpacing = 7;
+    const lampYs = [sz - lampSpacing, sz, sz + lampSpacing];
+
+    // Pole below the bottom lamp
+    ctx.fillStyle = 'rgba(35, 45, 41, 0.85)';
+    ctx.fillRect(sx - 1.1, lampYs[2] + lampRadius, 2.2, 10);
+
+    // Crossbar cap above the top lamp, with a short connecting nub
+    ctx.fillRect(sx - 6, lampYs[0] - lampRadius - 3, 12, 2.2);
+    ctx.fillRect(sx - 1.1, lampYs[0] - lampRadius - 3, 2.2, 3);
+
+    const litIndex = signalLampIndex(aspect);
+    const litColor = signalAspectColor(aspect);
+
+    for (let i = 0; i < 3; i++) {
+      const isLit = i === litIndex;
+      ctx.beginPath();
+      ctx.arc(sx, lampYs[i], lampRadius, 0, Math.PI * 2);
+      ctx.fillStyle = isLit ? litColor : 'rgba(15, 20, 18, 0.85)';
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = 'rgba(230, 235, 230, 0.55)';
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // Color priority: locomotives keep the plain loaded/fallback scheme
+  // (the base game doesn't destination-color engines either); passenger
+  // cars get their own fixed color; freight cars with a resolved waybill
+  // destination get that Area's color (matching the base game's own
+  // destination-coloring feature); anything else falls back to the plain
+  // loaded/fallback scheme.
+  // Fill color is purely about the car's identity -- engine, passenger, or
+  // freight destination -- and never changes based on load status anymore.
+  // Engines, tenders, and passenger cars all render as a plain neutral
+  // white, matching the in-game minimap. Freight cars with an active
+  // waybill get their destination color; freight without one gets a
+  // neutral idle color. Loaded/unloaded tracking status is intentionally
+  // not shown anymore -- useful during development, but just adds visual
+  // noise during regular play without affecting anything the player does.
+  function carFillColor(car) {
+    if (car.isLocomotive || car.isTender || car.isPassenger) {
+      return cssVar('--special-white');
+    }
+    if (car.destinationColor) {
+      const [r, g, b] = car.destinationColor;
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+    return cssVar('--freight-idle');
+  }
+
+  // Draws one car/engine icon oriented to its heading. Locomotives get a
+  // distinct wedge-nosed shape (larger, pointed front) so they read as
+  // engines at a glance; regular cars get a plain rounded rectangle.
+  // heading convention matches the pre-existing tick-mark math: rad=0 points
+  // "up" on screen (forward = sin(rad), -cos(rad)), which is exactly what
+  // ctx.rotate(rad) does to a shape drawn pointing toward local (0, -1).
+  // Approximate real-world car dimensions, in the same units as track
+  // coordinates. Icon size is derived from these times the current zoom
+  // scale (matching how toScreen() converts world distance to pixels), so
+  // icons stay snugly proportioned to the real gap between car centers at
+  // any zoom level, instead of a fixed pixel size that only looks right at
+  // one specific zoom.
+  //
+  // These fixed sizes are now fallback-only -- car.lengthUnits (the car's
+  // real axle-to-axle distance from the server) is used when present,
+  // scaled by AXLE_TO_FULL_LENGTH_FACTOR since axles/trucks sit inset from
+  // a car's actual ends, so axle-to-axle distance alone underestimates true
+  // length. The fixed constants below only apply when lengthUnits is
+  // missing (e.g. a car whose center position couldn't be computed).
+  const AXLE_TO_FULL_LENGTH_FACTOR = 1.35; // approximate, may need visual tuning
+  const CAR_LENGTH_UNITS = 14;
+  const CAR_WIDTH_UNITS = 3.2;
+  const TENDER_LENGTH_UNITS = CAR_LENGTH_UNITS * (2 / 3); // tenders are shorter than a typical car
+  const LOCO_LENGTH_UNITS = 20;
+  const LOCO_WIDTH_UNITS = 3.6;
+  const MIN_ICON_HALF_LENGTH = 3;  // px -- keeps icons visible zoomed way out
+  const MAX_ICON_HALF_LENGTH = 40; // px -- keeps icons sane zoomed way in
+
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(v, max));
+  }
+
+  function drawCarIcon(sx, sz, rad, isLocomotive, isTender, fillColor, realLengthUnits) {
+    ctx.save();
+    ctx.translate(sx, sz);
+    ctx.rotate(rad);
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.lineWidth = 1;
+    // Plain dark shadow for legibility against the track/background --
+    // no longer color-coded to anything, just depth.
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+    ctx.shadowBlur = 3;
+
+    const zoomScale = (transform && transform.scale) ? transform.scale : 1;
+
+    // Prefer the car's real axle-to-axle length (scaled up toward true car
+    // length) when the server provided one; otherwise fall back to a fixed
+    // per-type guess, same as before.
+    let lengthUnits;
+    if (realLengthUnits && realLengthUnits > 0) {
+      lengthUnits = realLengthUnits * AXLE_TO_FULL_LENGTH_FACTOR;
+    } else if (isLocomotive) {
+      lengthUnits = LOCO_LENGTH_UNITS;
+    } else if (isTender) {
+      lengthUnits = TENDER_LENGTH_UNITS;
+    } else {
+      lengthUnits = CAR_LENGTH_UNITS;
+    }
+
+    if (isLocomotive) {
+      const halfLen = clamp(lengthUnits / 2 * zoomScale, MIN_ICON_HALF_LENGTH, MAX_ICON_HALF_LENGTH);
+      const w = clamp(LOCO_WIDTH_UNITS / 2 * zoomScale, MIN_ICON_HALF_LENGTH * 0.5, MAX_ICON_HALF_LENGTH * 0.5);
+      const noseY = -halfLen, backY = halfLen * 0.65, shoulderY = -halfLen * 0.45;
+      ctx.beginPath();
+      ctx.moveTo(0, noseY);
+      ctx.lineTo(w, shoulderY);
+      ctx.lineTo(w, backY);
+      ctx.lineTo(-w, backY);
+      ctx.lineTo(-w, shoulderY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      const h = clamp(lengthUnits / 2 * zoomScale, MIN_ICON_HALF_LENGTH, MAX_ICON_HALF_LENGTH);
+      const w = clamp(CAR_WIDTH_UNITS / 2 * zoomScale, MIN_ICON_HALF_LENGTH * 0.4, MAX_ICON_HALF_LENGTH * 0.4);
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(-w, -h, w * 2, h * 2, 1.5);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.fillRect(-w, -h, w * 2, h * 2);
+        ctx.strokeRect(-w, -h, w * 2, h * 2);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // Short display label for a car -- just the road number (last token of
+  // "REPORTINGMARK NUMBER"), matching how the in-game minimap labels engines.
+  function shortCarLabel(car) {
+    // Full "REPORTINGMARK NUMBER" -- not just the number, since two
+    // different reporting marks can share the same road number.
+    return car.id || '';
+  }
+
+  // Draws a railroad switch-stand ("ground throw") symbol: a circular base
+  // with an inner lens and a diagonal lever, matching the reference icon.
+  // Semi-transparent (rather than solid) so it sits more like an overlay on
+  // the map. CTC-controlled switches get a "CTC" label placed underneath.
+  function drawSwitchIcon(sx, sz, color, isCTC) {
+    ctx.save();
+    ctx.globalAlpha = 0.72;
+
+    const baseRadius = 5;
+
+    // Lever: thick rounded-cap line angled up and to the left from the base
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.moveTo(sx + 1.5, sz - baseRadius * 0.6);
+    ctx.lineTo(sx - 6, sz - baseRadius - 8);
+    ctx.stroke();
+
+    // Base circle
+    ctx.fillStyle = color;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(sx, sz, baseRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Inner lens
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.beginPath();
+    ctx.arc(sx, sz, baseRadius * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+
+    if (isCTC) {
+      drawLabel(sx, sz + baseRadius + 10, 'CTC');
+    }
+  }
+
+  // Draws upright text (never rotated, regardless of the icon's heading) on
+  // a small dark pill, anchored below a given screen point.
+  function drawLabel(sx, sz, text) {
+    if (!text) return;
+    ctx.save();
+    const fontPx = 10 * uiScale;
+    ctx.font = `${fontPx}px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const metrics = ctx.measureText(text);
+    const w = metrics.width + 8 * uiScale;
+    const h = 14 * uiScale;
+    ctx.fillStyle = 'rgba(11, 18, 16, 0.8)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(sx - w / 2, sz - h / 2, w, h, 3);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(sx - w / 2, sz - h / 2, w, h);
+    }
+    ctx.fillStyle = '#d9e3dd';
+    ctx.fillText(text, sx, sz + 0.5);
+    ctx.restore();
+  }
+
+  function draw() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    if (!transform) {
+      transform = computeFitTransform();
+      baseScale = transform.scale;
+    }
+
+    updateZoomReadout();
+
+    // Track segments
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = cssVar('--track');
+    ctx.lineWidth = 1.5;
+    for (const seg of segments) {
+      if (!seg.points || seg.points.length < 2) continue;
+      ctx.beginPath();
+      for (let i = 0; i < seg.points.length; i++) {
+        const [sx, sz] = toScreen(seg.points[i][0], seg.points[i][1]);
+        if (i === 0) ctx.moveTo(sx, sz); else ctx.lineTo(sx, sz);
+      }
+      ctx.stroke();
+    }
+
+    // Switches
+    renderedSwitches = [];
+
+    // Some junctions have multiple nearby TrackNodes -- one flagged CTC,
+    // another not. Drawing both produces an overlapping square+circle at
+    // what's really one physical location, so suppress the plain square
+    // whenever a CTC switch sits within a small radius (world units, not
+    // screen pixels, so this doesn't depend on current zoom level).
+    const CTC_DEDUPE_RADIUS = 8;
+    const ctcSwitchPositions = [];
+    for (const sw of switches.values()) {
+      if (sw.x !== null && sw.isCTC) ctcSwitchPositions.push(sw);
+    }
+
+    for (const sw of switches.values()) {
+      if (sw.x === null) continue;
+      if (!sw.isCTC && ctcSwitchPositions.some(p => Math.hypot(p.x - sw.x, p.z - sw.z) < CTC_DEDUPE_RADIUS)) {
+        continue; // a CTC switch already represents this junction
+      }
+
+      const [sx, sz] = toScreen(sw.x, sw.z);
+      renderedSwitches.push({ sx, sz, sw });
+      const color = sw.isThrown ? cssVar('--thrown') : cssVar('--live');
+      drawSwitchIcon(sx, sz, color, sw.isCTC);
+    }
+
+    // Signals -- genuinely separate objects from switches (their own
+    // position, one of six real aspects), rendered as a signal mast so
+    // they read unmistakably as a real signal rather than a switch.
+    renderedSignals = [];
+    for (const sg of signals.values()) {
+      if (sg.x === null) continue;
+      const [sx, sz] = toScreen(sg.x, sg.z);
+      renderedSignals.push({ sx, sz, sg });
+      drawSignalIcon(sx, sz, sg.aspect);
+    }
+
+    // Cars -- icons first, then all engine labels in a second pass, so a
+    // label always renders on top of every icon rather than being buried
+    // under whichever car happened to be drawn after it.
+    renderedCars = [];
+    for (const car of cars.values()) {
+      const [sx, sz] = toScreen(car.x, car.z);
+      renderedCars.push({ sx, sz, car });
+      const rad = (car.rotationY || 0) * Math.PI / 180;
+      drawCarIcon(sx, sz, rad, !!car.isLocomotive, !!car.isTender, carFillColor(car), car.lengthUnits);
+    }
+    for (const rc of renderedCars) {
+      if (rc.car.isLocomotive) {
+        drawLabel(rc.sx, rc.sz + 16, shortCarLabel(rc.car));
+      }
+    }
+
+    updatePinnedPopups();
+  }
+
+  // Periodic redraw to keep the live-state rate stat fresh even between messages
+  setInterval(() => { updateCarStats(); }, 500);
+
+  connectBtn.addEventListener('click', reconnectNow);
+
+  trackBtn.addEventListener('click', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send('GET_TRACK_DATA');
+      log('SEND', 'GET_TRACK_DATA');
+    }
+  });
+
+  flipXBtn.addEventListener('click', () => {
+    flipX = !flipX;
+    flipXBtn.classList.toggle('active', flipX);
+    transform = null; // recompute fit with the new orientation
+    hideInfoPopup();
+    draw();
+  });
+
+  flipZBtn.addEventListener('click', () => {
+    flipZ = !flipZ;
+    flipZBtn.classList.toggle('active', flipZ);
+    transform = null;
+    hideInfoPopup();
+    draw();
+  });
+
+  clearLogBtn.addEventListener('click', () => {
+    logEl.innerHTML = '';
+    logShown = 0;
+  });
+
+  // --- Zoom & pan ---
+
+  function updateZoomReadout() {
+    if (!transform || !baseScale) return;
+    zoomReadout.textContent = Math.round((transform.scale / baseScale) * 100) + '%';
+  }
+
+  function zoomAt(screenX, screenY, factor) {
+    if (!transform || !baseScale) return;
+
+    const minScale = baseScale * 0.05;  // zoomed out 20x past the fit view
+    const maxScale = baseScale * 100;   // zoomed in 100x past the fit view
+    const newScale = Math.max(minScale, Math.min(transform.scale * factor, maxScale));
+    const actualFactor = newScale / transform.scale;
+    if (actualFactor === 1) return;
+
+    // Keep the world point currently under the cursor fixed on screen while
+    // the scale changes, so zooming feels anchored rather than re-centering.
+    transform.offsetX = screenX - (screenX - transform.offsetX) * actualFactor;
+    transform.offsetY = screenY - (screenY - transform.offsetY) * actualFactor;
+    transform.scale = newScale;
+
+    draw();
+  }
+
+  function resetView() {
+    transform = null; // forces computeFitTransform() on next draw
+    hideInfoPopup();
+    draw();
+  }
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    zoomAt(mouseX, mouseY, factor);
+  }, { passive: false });
+
+  const TAP_THRESHOLD_PX = 6; // movement below this counts as a tap, not a drag
+
+  let isPanning = false;
+  let panStartX = 0;
+  let panStartY = 0;
+  let dragDistance = 0;
+
+  canvas.addEventListener('mousedown', (e) => {
+    isPanning = true;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    dragDistance = 0;
+    hideInfoPopup();
+    canvas.classList.add('grabbing');
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isPanning || !transform) return;
+    const dx = e.clientX - panStartX;
+    const dy = e.clientY - panStartY;
+    dragDistance += Math.abs(dx) + Math.abs(dy);
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    transform.offsetX += dx;
+    transform.offsetY += dy;
+    draw();
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    isPanning = false;
+    canvas.classList.remove('grabbing');
+    if (dragDistance < TAP_THRESHOLD_PX) {
+      handleTap(e.clientX, e.clientY);
+    }
+  });
+
+  // --- Tap-for-details ---
+
+  function handleTap(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const hitRadius = 16;
+
+    let best = null;
+    let bestDist = hitRadius;
+
+    // Cars take priority over switches/signals when both are within range,
+    // since they're rendered on top and more often the intended target.
+    for (const rc of renderedCars) {
+      const d = Math.hypot(rc.sx - x, rc.sz - y);
+      if (d < bestDist) { bestDist = d; best = { kind: 'car', item: rc.car, sx: rc.sx, sz: rc.sz }; }
+    }
+    if (!best) {
+      for (const rs of renderedSwitches) {
+        const d = Math.hypot(rs.sx - x, rs.sz - y);
+        if (d < bestDist) { bestDist = d; best = { kind: 'switch', item: rs.sw, sx: rs.sx, sz: rs.sz }; }
+      }
+      for (const rsg of renderedSignals) {
+        const d = Math.hypot(rsg.sx - x, rsg.sz - y);
+        if (d < bestDist) { bestDist = d; best = { kind: 'signal', item: rsg.sg, sx: rsg.sx, sz: rsg.sz }; }
+      }
+    }
+
+    if (best) {
+      if (best.kind === 'switch' && !best.item.isCTC) {
+        // Non-CTC switches can be toggled directly from the map, mirroring
+        // a plain left-click on the switch in-game. CTC-controlled switches
+        // are locked out at the track and can only be set via the CTC
+        // panel, so those still just show details instead.
+        sendSetSwitch(best.item.id);
+        hideInfoPopup();
+      } else {
+        showInfoPopup(best);
+      }
+    } else {
+      hideInfoPopup();
+    }
+  }
+
+  function sendSetSwitch(switchId) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send('SET_SWITCH:' + switchId);
+      log('SEND', `SET_SWITCH:${switchId}`);
+    }
+  }
+
+  // --- Popup pool: reusable DOM elements keyed by a string, so both the
+  // single tap-popup and the "pin all engines" feature share one mechanism
+  // instead of duplicating positioning/lifecycle logic.
+
+  const popupPool = new Map(); // key -> HTMLElement
+  const TAP_POPUP_KEY = '__tap__';
+
+  function getOrCreatePopup(key) {
+    let el = popupPool.get(key);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'info-popup';
+      infoPopupLayer.appendChild(el);
+      popupPool.set(key, el);
+    }
+    return el;
+  }
+
+  function removePopup(key) {
+    const el = popupPool.get(key);
+    if (el) {
+      el.remove();
+      popupPool.delete(key);
+    }
+  }
+
+  function carPopupHtml(c) {
+    let icon = '🚃';
+    if (c.isLocomotive) icon = '🚂';
+    else if (c.isPassenger) icon = '🚋';
+
+    let cargoHtml = '';
+    if (c.loads && c.loads.length > 0) {
+      for (const l of c.loads) {
+        cargoHtml += `<div class="row"><span class="k">Cargo</span><span>${escapeHtml(l)}</span></div>`;
+      }
+    }
+    if (c.tenderLoads && c.tenderLoads.length > 0) {
+      for (const l of c.tenderLoads) {
+        cargoHtml += `<div class="row"><span class="k">Tender</span><span>${escapeHtml(l)}</span></div>`;
+      }
+    }
+
+    return `<div class="title">${icon} ${escapeHtml(c.id)}</div>` +
+      (c.carType ? `<div class="row"><span class="k">Type</span><span>${escapeHtml(c.carType)}</span></div>` : '') +
+      (c.isPassenger ? `<div class="row"><span class="k">Service</span><span>Passenger</span></div>` : '') +
+      (c.destinationName ? `<div class="row"><span class="k">Destination</span><span>${escapeHtml(c.destinationName)}</span></div>` : '') +
+      cargoHtml;
+  }
+
+  function switchPopupHtml(s) {
+    const label = s.isCTC ? 'CTC Switch' : 'Switch';
+    return `<div class="title">${label} ${escapeHtml(s.id)}</div>` +
+      `<div class="row"><span class="k">State</span><span class="${s.isThrown ? 'status-thrown' : 'status-normal'}">${s.isThrown ? 'Reversed' : 'Normal'}</span></div>`;
+  }
+
+  function signalPopupHtml(sg) {
+    return `<div class="title">🚦 Signal ${escapeHtml(sg.id)}</div>` +
+      `<div class="row"><span class="k">Aspect</span><span>${escapeHtml(sg.aspect || 'Unknown')}</span></div>`;
+  }
+
+  // Positions a popup near (sx, sz), clamped so it never runs off the
+  // visible map area.
+  function positionPopup(el, sx, sz) {
+    const mapRect = canvas.parentElement.getBoundingClientRect();
+    const popupW = el.offsetWidth || 200;
+    const popupH = el.offsetHeight || 60;
+    let left = sx + 14;
+    let top = sz - popupH - 10;
+    if (left + popupW > mapRect.width - 8) left = sx - popupW - 14;
+    if (top < 8) top = sz + 14;
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+
+  function showInfoPopup(hit) {
+    const el = getOrCreatePopup(TAP_POPUP_KEY);
+    if (hit.kind === 'car') el.innerHTML = carPopupHtml(hit.item);
+    else if (hit.kind === 'signal') el.innerHTML = signalPopupHtml(hit.item);
+    else el.innerHTML = switchPopupHtml(hit.item);
+    positionPopup(el, hit.sx, hit.sz);
+  }
+
+  function hideInfoPopup() {
+    removePopup(TAP_POPUP_KEY);
+  }
+
+  // "Pin engine info" toggle -- when active, every locomotive gets a
+  // persistent popup that follows it as the map pans/zooms, without needing
+  // to tap each one individually.
+  let pinEnginesEnabled = false;
+
+  function updatePinnedPopups() {
+    if (!pinEnginesEnabled) return;
+
+    const activeKeys = new Set();
+    for (const rc of renderedCars) {
+      if (!rc.car.isLocomotive) continue;
+      const key = 'loco:' + rc.car.id;
+      activeKeys.add(key);
+      const el = getOrCreatePopup(key);
+      el.innerHTML = carPopupHtml(rc.car);
+      positionPopup(el, rc.sx, rc.sz);
+    }
+    // Drop pinned popups for locomotives that are no longer present
+    // (decoupled, despawned, or a different save loaded).
+    for (const key of Array.from(popupPool.keys())) {
+      if (key.startsWith('loco:') && !activeKeys.has(key)) {
+        removePopup(key);
+      }
+    }
+  }
+
+  function clearPinnedPopups() {
+    for (const key of Array.from(popupPool.keys())) {
+      if (key.startsWith('loco:')) removePopup(key);
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = String(s == null ? '' : s);
+    return div.innerHTML;
+  }
+
+  // --- Touch: single-finger pan/tap, two-finger pinch-to-zoom ---
+
+  let touchMode = null; // 'pan' | 'pinch' | null
+  let touchLastX = 0;
+  let touchLastY = 0;
+  let pinchLastDist = 0;
+  let touchDragDistance = 0;
+
+  function touchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function touchMidpoint(touches, rect) {
+    return [
+      (touches[0].clientX + touches[1].clientX) / 2 - rect.left,
+      (touches[0].clientY + touches[1].clientY) / 2 - rect.top
+    ];
+  }
+
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    hideInfoPopup();
+    if (e.touches.length === 1) {
+      touchMode = 'pan';
+      touchLastX = e.touches[0].clientX;
+      touchLastY = e.touches[0].clientY;
+      touchDragDistance = 0;
+    } else if (e.touches.length === 2) {
+      touchMode = 'pinch';
+      pinchLastDist = touchDistance(e.touches);
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (!transform) return;
+    const rect = canvas.getBoundingClientRect();
+
+    if (touchMode === 'pan' && e.touches.length === 1) {
+      const dx = e.touches[0].clientX - touchLastX;
+      const dy = e.touches[0].clientY - touchLastY;
+      touchDragDistance += Math.abs(dx) + Math.abs(dy);
+      touchLastX = e.touches[0].clientX;
+      touchLastY = e.touches[0].clientY;
+      transform.offsetX += dx;
+      transform.offsetY += dy;
+      draw();
+    } else if (touchMode === 'pinch' && e.touches.length === 2) {
+      const newDist = touchDistance(e.touches);
+      const [mx, my] = touchMidpoint(e.touches, rect);
+      zoomAt(mx, my, newDist / pinchLastDist);
+      pinchLastDist = newDist;
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', (e) => {
+    if (e.touches.length === 0) {
+      if (touchMode === 'pan' && touchDragDistance < TAP_THRESHOLD_PX && e.changedTouches.length > 0) {
+        handleTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+      }
+      touchMode = null;
+    } else if (e.touches.length === 1) {
+      // Lifted one finger out of a two-finger pinch -- resume as a pan
+      // instead of ending the gesture entirely.
+      touchMode = 'pan';
+      touchLastX = e.touches[0].clientX;
+      touchLastY = e.touches[0].clientY;
+      touchDragDistance = TAP_THRESHOLD_PX; // a pinch already happened; don't treat the remaining lift as a tap
+    }
+  });
+
+  canvas.addEventListener('touchcancel', () => {
+    touchMode = null;
+  });
+
+  zoomInBtn.addEventListener('click', () => {
+    const rect = canvas.getBoundingClientRect();
+    zoomAt(rect.width / 2, rect.height / 2, 1.4);
+  });
+
+  zoomOutBtn.addEventListener('click', () => {
+    const rect = canvas.getBoundingClientRect();
+    zoomAt(rect.width / 2, rect.height / 2, 1 / 1.4);
+  });
+
+  resetViewBtn.addEventListener('click', resetView);
+
+  function applyUiScale(scale) {
+    uiScale = scale;
+    document.documentElement.style.setProperty('--ui-scale', String(scale));
+    uiScaleValue.textContent = Math.round(scale * 100) + '%';
+    // Canvas-drawn labels need an explicit redraw; the popup/legend text
+    // scales automatically via the CSS variable with no redraw needed.
+    draw();
+  }
+
+  uiScaleSlider.value = String(uiScale);
+  applyUiScale(uiScale);
+
+  uiScaleSlider.addEventListener('input', () => {
+    const scale = parseFloat(uiScaleSlider.value);
+    applyUiScale(scale);
+    try {
+      localStorage.setItem('minimapUiScale', String(scale));
+    } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
+  });
+
+  diagBtn.addEventListener('click', () => {
+    sidePane.classList.toggle('hidden');
+    diagBtn.classList.toggle('active', !sidePane.classList.contains('hidden'));
+    resizeCanvas(); // map-pane width changed, refit
+  });
+
+  pinEnginesBtn.addEventListener('click', () => {
+    pinEnginesEnabled = !pinEnginesEnabled;
+    pinEnginesBtn.classList.toggle('active', pinEnginesEnabled);
+    if (!pinEnginesEnabled) clearPinnedPopups();
+    draw();
+  });
+
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // No manual "Connect" step needed -- this page is served by the same
+  // process it talks to, so the right address is already known.
+  connect();
+})();
+</script>
+
+</body>
+</html>

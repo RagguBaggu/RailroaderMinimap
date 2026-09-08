@@ -1,0 +1,90 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>RailroaderMinimapServer</AssemblyName>
+    <RootNamespace>RailroaderMinimapServer</RootNamespace>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <!-- Update this path to your Railroader root folder -->
+    <RailroaderDir>C:\Program Files (x86)\Steam\steamapps\common\Railroader</RailroaderDir>
+    <!-- Confirmed: UnityModManager.dll lives here for this install. -->
+    <UnityModManagerDir>$(RailroaderDir)\Railroader_Data\Managed\UnityModManager</UnityModManagerDir>
+  </PropertyGroup>
+
+  <!-- The companion app's HTML/CSS/JS is bundled directly into the DLL as
+       an embedded resource and served by the mod's own HTTP server, so
+       there's nothing extra to host or distribute: one file, one URL. -->
+  <ItemGroup>
+    <EmbeddedResource Include="CompanionApp.html" />
+  </ItemGroup>
+
+  <!-- Copy Info.json alongside the built DLL so the output folder is a
+       complete, ready-to-install UMM mod folder. -->
+  <ItemGroup>
+    <None Include="Info.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- WebSocketSharp: Unity/Mono's HttpListener does NOT implement WebSocket
+       support (AcceptWebSocketAsync throws NotImplementedException at
+       runtime, even though it compiles fine against the net48 reference
+       assemblies). WebSocketSharp implements the WebSocket protocol itself
+       over raw sockets, bypassing that Mono limitation entirely.
+
+       NOTE: a UMM GitHub issue (newman55/unity-mod-manager#133) specifically
+       discusses Railroader mods with more than one DLL failing to load
+       depending on UMM's install method (Doorstop proxy vs. assembly
+       injection): if WebSocketSharp.dll doesn't get picked up automatically
+       from this mod's own output folder, try copying it directly into
+       Railroader_Data\Managed\ instead. This install is confirmed on
+       DoorstopProxy, which the same issue thread confirms handles this
+       correctly. -->
+  <ItemGroup>
+    <PackageReference Include="WebSocketSharp" Version="1.0.3-rc11" />
+  </ItemGroup>
+
+  <!-- Game Assemblies -->
+  <ItemGroup>
+    <Reference Include="Core">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Definition">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Definition.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Newtonsoft.Json.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Unity Mod Manager + Harmony: confirmed paths for this install
+       (Railroader_Data\Managed\UnityModManager\, containing both
+       UnityModManager.dll and 0Harmony.dll). -->
+  <ItemGroup>
+    <Reference Include="UnityModManager">
+      <HintPath>$(UnityModManagerDir)\UnityModManager.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(UnityModManagerDir)\0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
