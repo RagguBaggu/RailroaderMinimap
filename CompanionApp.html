@@ -367,7 +367,7 @@
   let segments = [];           // [{id, nodeA, nodeB, length, speedLimit, points:[[x,z],...]}]
   const switches = new Map();  // id -> {id, x, z, isThrown, isCTC}
   const signals = new Map();   // id -> {id, x, z, aspect}
-  const areas = new Map();     // id -> {id, name, x, z, radius, color:[r,g,b]}
+  const areas = new Map();     // id -> {id, name, x, z}
   const cars = new Map();      // id -> {id, x, z, rotationY, loaded}
 
   // View transform (world -> screen). Starts as the auto-fit transform when
@@ -505,7 +505,7 @@
         }
         areas.clear();
         for (const a of (msg.areas || [])) {
-          areas.set(a.id, { id: a.id, name: a.name, x: a.position[0], z: a.position[1], radius: a.radius, color: a.color });
+          areas.set(a.id, { id: a.id, name: a.name, x: a.position[0], z: a.position[1] });
         }
         transform = null; // recompute fit on next draw
         $('statSegments').textContent = segments.length;

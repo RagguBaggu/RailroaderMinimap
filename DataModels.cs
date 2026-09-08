@@ -89,11 +89,12 @@ namespace RailroaderMinimapServer.Data
         public string aspect { get; set; }
     }
 
-    // A named freight/industry zone (yard, industry, interchange, etc.) --
-    // the same regions the base game's own minimap labels. Static geometry
-    // sent once as part of the track network cache; areas don't currently
-    // push live updates since their position/extent doesn't change during
-    // a session.
+    // A named point on the map -- yard, industry, interchange, etc. -- the
+    // same labels the base game's own minimap shows (sourced from
+    // UI.Map.MapLabel; see TrackExtractor for why). Static geometry sent
+    // once as part of the track network cache; areas don't currently push
+    // live updates since a label's position doesn't change during a
+    // session, and only ever appear once actually unlocked.
     public class AreaDto
     {
         public string id { get; set; }
@@ -102,12 +103,6 @@ namespace RailroaderMinimapServer.Data
         // Each entry is [x, z] in world coordinates, same convention as
         // SwitchDto/SignalDto positions.
         public float[] position { get; set; }
-        public float radius { get; set; }
-
-        // [r, g, b] (0-255) -- the same Area.tagColor already used for
-        // freight destination coloring (see CarDataDto.destinationColor),
-        // so an area's label/circle visually matches the cars heading there.
-        public int[] color { get; set; }
     }
 
     public class CarDataDto

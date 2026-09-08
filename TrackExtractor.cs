@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using UnityEngine;
 using RailroaderMinimapServer.Data;
 using Helpers; // WorldTransformer.WorldToGame
 using Track;
 using Track.Signals; // CTCSignal, SignalAspect
-using Model.Ops; // Area, OpsController
+using UI.Map; // MapLabel
 
 namespace RailroaderMinimapServer
 {
@@ -141,34 +142,47 @@ namespace RailroaderMinimapServer
                 });
             }
 
-            // 4. EXTRACT AREAS -- yard/industry/interchange zones, the same
-            // regions the base game's own minimap labels. Area is a real
-            // scene MonoBehaviour (not just a lookup key), so it's enumerated
-            // directly via OpsController.Shared.Areas rather than resolved
-            // per-car the way destination coloring does.
-            OpsController opsController = OpsController.Shared;
-            if (opsController != null)
+            // 4. EXTRACT AREA LABELS -- confirmed (via decompiling
+            // Assembly-CSharp) that the base game's own minimap doesn't
+            // label Model.Ops.Area at all -- it renders a literal top-down
+            // camera view of the scene, and every visible name on it (yard
+            // names, industry names, modded content alike) comes from a
+            // plain UI.Map.MapLabel component (just a "text" string on a
+            // world-positioned Canvas) via MapBuilder's own
+            // FindObjectsOfType<MapLabel> call. Using the same component
+            // here means modded areas that add their own MapLabel (the same
+            // way they'd integrate with the base minimap) are picked up for
+            // free, with no special-casing.
+            //
+            // Deliberately NOT includeInactive, same convention as the
+            // CTCSignal loop above: Game.Progression.MapFeature -- the
+            // milestone/unlock system -- disables a locked region's
+            // gameObjectsEnableOnUnlock (which includes its MapLabel) via
+            // GameObject.SetActive(false) until unlocked, so the default
+            // active-only FindObjectsOfType query already excludes
+            // not-yet-unlocked area names with no extra bookkeeping needed.
+            foreach (var label in UnityEngine.Object.FindObjectsOfType<MapLabel>())
             {
-                foreach (var area in opsController.Areas)
-                {
-                    if (area == null) continue;
+                if (label == null || string.IsNullOrEmpty(label.text)) continue;
 
-                    Vector3 pos = WorldTransformer.WorldToGame(area.transform.position);
-                    Color c = area.tagColor;
-                    network.areas.Add(new AreaDto
-                    {
-                        id = !string.IsNullOrEmpty(area.identifier) ? area.identifier : area.name,
-                        name = area.name,
-                        position = new float[] { pos.x, MapCoordinates.MapZ(pos.z) },
-                        radius = area.radius,
-                        color = new int[]
-                        {
-                            Mathf.RoundToInt(Mathf.Clamp01(c.r) * 255f),
-                            Mathf.RoundToInt(Mathf.Clamp01(c.g) * 255f),
-                            Mathf.RoundToInt(Mathf.Clamp01(c.b) * 255f)
-                        }
-                    });
-                }
+                // MapLabel.text is never set at runtime anywhere in the game's
+                // own code (confirmed by decompiling) -- every value is
+                // authored directly in the scene, including several that are
+                // deliberately icon-only TextMeshPro sprite tags (e.g.
+                // "<sprite name=\"Water\">" for a water tower marker on the
+                // base minimap), not real place names. Stripping rich-text
+                // tags and skipping anything left blank filters those out
+                // without needing to special-case specific tag names.
+                string displayText = StripRichTextTags(label.text);
+                if (string.IsNullOrWhiteSpace(displayText)) continue;
+
+                Vector3 pos = WorldTransformer.WorldToGame(label.transform.position);
+                network.areas.Add(new AreaDto
+                {
+                    id = !string.IsNullOrEmpty(label.name) ? label.name : displayText,
+                    name = displayText,
+                    position = new float[] { pos.x, MapCoordinates.MapZ(pos.z) }
+                });
             }
 
             return new TrackNetworkExtractionResult
@@ -187,6 +201,15 @@ namespace RailroaderMinimapServer
         private static string NodeIdentifier(TrackNode node)
         {
             return !string.IsNullOrEmpty(node.id) ? node.id : node.name;
+        }
+
+        private static readonly Regex RichTextTagPattern = new Regex("<[^>]+>", RegexOptions.Compiled);
+
+        // Strips TextMeshPro rich-text tags (e.g. "<sprite name=...>",
+        // "<color=...>...</color>") down to their plain visible text.
+        private static string StripRichTextTags(string text)
+        {
+            return RichTextTagPattern.Replace(text, string.Empty).Trim();
         }
     }
 }

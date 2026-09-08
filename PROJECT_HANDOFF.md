@@ -147,6 +147,43 @@ after a game update, these are the exact APIs to re-verify first.
   `minimap`/`minimap_url` console command (also accepts an optional leading
   `/`, since it wasn't confirmed either way whether the game's own console
   convention expects one).
+- **`UI.Map.MapLabel` is the actual source of every name shown on the base
+  game's own minimap** -- `Model.Ops.Area` is NOT it (a common wrong guess,
+  since `Area` looks like the obvious candidate and is otherwise useful for
+  destination coloring). The base minimap is a literal top-down camera
+  render of the scene (`UI.Map.MapBuilder`, with a real `mapCamera`), and
+  `MapBuilder` populates its label set via
+  `UnityEngine.Object.FindObjectsOfType<MapLabel>(includeInactive: true)`.
+  `MapLabel` itself is trivial: just a `public string text` on a
+  world-positioned `Canvas`. Confirmed by decompiling `Assembly-CSharp.dll`
+  with `ilspycmd` (`dotnet tool install -g ilspycmd`; `-t <FullTypeName>
+  -r <path-to-Managed-dir> Assembly-CSharp.dll` decompiles one type without
+  needing a full-assembly dump) -- worth reaching for over
+  `MetadataLoadContext`-based reflection (still fine for browsing type
+  *signatures*) whenever actual method *bodies*/logic are what's in
+  question, not just what members exist.
+  - **Unlock/progression gating**: `Game.Progression.MapFeature` (found via
+    the same decompile) is the milestone-unlock system. Each `MapFeature`
+    has a designer-authored `gameObjectsEnableOnUnlock` array that gets
+    `GameObject.SetActive(unlocked)` when the feature unlocks -- a locked
+    region's `MapLabel` is (in the expected, designer-followed case)
+    included in that array, so it's simply an inactive GameObject until
+    unlocked. This means extracting labels via the *default*
+    `FindObjectsOfType<MapLabel>()` (i.e. **not** `includeInactive: true`,
+    unlike `MapBuilder`'s own call above) already excludes not-yet-unlocked
+    area names for free -- same "inactive == not unlocked" convention
+    already used for `CTCSignal` above, no separate progression-state check
+    needed.
+  - **This is also the answer for modded areas** (e.g. a mod-added industry
+    like "Kirkland Coal Mine" not showing up): any mod integrating with the
+    base game's own minimap adds its own `MapLabel` the same way the base
+    game's own content does, at whatever position the mod places it -- so
+    reading `MapLabel` instead of `Area` picks up modded regions with no
+    special-casing, whereas `Area`-based extraction only ever saw base-game
+    regions (and DID include locked ones, since `Model.Ops.Area` itself
+    isn't what gets deactivated on lock -- only its constituent
+    `Industry.ProgressionDisabled` flags and unrelated
+    `gameObjectsEnableOnUnlock` entries are).
 
 ## Resolved gotchas (do not reintroduce these)
 
