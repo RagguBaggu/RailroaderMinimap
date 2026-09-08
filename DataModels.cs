@@ -21,6 +21,8 @@ namespace RailroaderMinimapServer.Data
         public List<SwitchDto> switches { get; set; } = new List<SwitchDto>();
         public List<SignalDto> signals { get; set; } = new List<SignalDto>();
         public List<AreaDto> areas { get; set; } = new List<AreaDto>();
+        public List<ServicePointDto> servicePoints { get; set; } = new List<ServicePointDto>();
+        public List<PassengerStopDto> passengerStops { get; set; } = new List<PassengerStopDto>();
     }
 
     public class SegmentDto
@@ -105,6 +107,47 @@ namespace RailroaderMinimapServer.Data
         public float[] position { get; set; }
     }
 
+    // A locomotive supply point -- water, coal, or diesel -- found via the
+    // RollingStock.CarLoadTargetLoader supplying it (see TrackExtractor for
+    // why: no base game minimap icon exists for these, unlike most other
+    // markers here).
+    public class ServicePointDto
+    {
+        public string id { get; set; }
+
+        // "Water", "Coal", or "Diesel".
+        public string kind { get; set; }
+        public float[] position { get; set; }
+    }
+
+    // One passenger platform track. A single station can have more than one
+    // (e.g. two parallel platform tracks), so this is one entry per
+    // PassengerStop.TrackSpans element, not one per station -- several
+    // entries can share the same `name`. The base game's own minimap shows
+    // these via the actual 3D platform geometry (it's a literal camera
+    // render), which we don't have, so unlike most other markers here this
+    // one has no equivalent game icon/label to source from at all (see
+    // TrackExtractor).
+    public class PassengerStopDto
+    {
+        public string id { get; set; }
+        public string name { get; set; }
+
+        // The platform track's two endpoints -- NOT a single center point
+        // plus a server-computed rotation. Sending both endpoints lets the
+        // client derive rotation/length itself from their already-
+        // toScreen()-transformed positions, which stays correct regardless
+        // of the Flip X/Z toggles or current zoom, instead of us baking in
+        // a rotation angle server-side that a flip toggle would invert.
+        public float[] positionA { get; set; }
+        public float[] positionB { get; set; }
+
+        // The track span's real curve length (game/track units) -- distinct
+        // from the straight-line distance between positionA/positionB,
+        // which would underestimate a curved platform's true length.
+        public float length { get; set; }
+    }
+
     public class CarDataDto
     {
         public string id { get; set; }
@@ -173,6 +216,34 @@ namespace RailroaderMinimapServer.Data
         // shown in the tap-for-details popup. Null under the same conditions
         // as destinationColor.
         public string destinationName { get; set; }
+
+        // True once this car has actually reached destinationName (matches
+        // the game's own OpsControllerExtensions.TryGetDestinationInfo).
+        // Null under the same conditions as destinationColor/destinationName
+        // (no active waybill). The client uses the false->true edge to flash
+        // a "just arrived" indicator, and any change while destinationName
+        // itself changes to flash a "new destination assigned" indicator --
+        // both transient, not sent as their own field, since detecting the
+        // edge only requires comparing this tick's value to the last one
+        // already held client-side.
+        public bool? atDestination { get; set; }
+
+        // True while this car is running hot (Car.HasHotbox) -- a real
+        // mechanical problem the player needs to address (oil it or stop),
+        // not just informational, so the client renders this prominently
+        // and keeps it visible for as long as it stays true.
+        public bool hasHotbox { get; set; }
+
+        // True while this car's handbrake is set (Car.air.handbrakeApplied).
+        // Same "stays visible until resolved" treatment as hasHotbox.
+        public bool handbrakeApplied { get; set; }
+
+        // The nearest Area to this car's CURRENT position (distinct from
+        // destinationName, which is where it's headed) -- only resolved
+        // when hasHotbox is true, since it's the one place this is actually
+        // used (the hotbox message feed's "which region" text). Null
+        // otherwise.
+        public string nearestAreaName { get; set; }
     }
 
     public class LiveStatePayloadDto

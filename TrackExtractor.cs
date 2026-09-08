@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEngine;
 using RailroaderMinimapServer.Data;
@@ -7,6 +8,8 @@ using Helpers; // WorldTransformer.WorldToGame
 using Track;
 using Track.Signals; // CTCSignal, SignalAspect
 using UI.Map; // MapLabel
+using Model.Ops; // PassengerStop
+using RollingStock; // CarLoadTargetLoader
 
 namespace RailroaderMinimapServer
 {
@@ -169,10 +172,12 @@ namespace RailroaderMinimapServer
                 // own code (confirmed by decompiling) -- every value is
                 // authored directly in the scene, including several that are
                 // deliberately icon-only TextMeshPro sprite tags (e.g.
-                // "<sprite name=\"Water\">" for a water tower marker on the
-                // base minimap), not real place names. Stripping rich-text
-                // tags and skipping anything left blank filters those out
-                // without needing to special-case specific tag names.
+                // "<sprite name=\"Water\">", decorative only), not real place
+                // names. Stripping rich-text tags and skipping anything left
+                // blank filters those out. (Water service points are NOT
+                // sourced from this label -- see RollingStock.CarLoadTargetLoader
+                // below; this label turned out to be inconsistently authored
+                // across water stations and an unreliable signal on its own.)
                 string displayText = StripRichTextTags(label.text);
                 if (string.IsNullOrWhiteSpace(displayText)) continue;
 
@@ -183,6 +188,152 @@ namespace RailroaderMinimapServer
                     name = displayText,
                     position = new float[] { pos.x, MapCoordinates.MapZ(pos.z) }
                 });
+            }
+
+            // 5. EXTRACT SERVICE POINTS (water/coal/diesel supply for
+            // locomotives). NOT sourced from Industry/IndustryUnloader (an
+            // earlier attempt at this): confirmed by decompiling the
+            // WaypointQueue mod (which automates real Auto Engineer
+            // refueling, so its detection logic is proven to actually work
+            // in-game) that the real, authoritative source is
+            // RollingStock.CarLoadTargetLoader -- a leaf MonoBehaviour
+            // placed directly at the physical crane/chute/pump, entirely
+            // independent of the Industry/waybill economy. Its own
+            // `sourceIndustry` field is explicitly nullable ("if null,
+            // unlimited loads are provided"), which is exactly why water
+            // (unlimited, free) never appeared in the industry-based
+            // "Fuel Inventory" report that coal/diesel are tracked through --
+            // it was never an Industry-linked component to begin with, for
+            // any of the three.
+            //
+            // WaypointQueue itself uses this component's raw
+            // transform.position directly (no CenterPoint-style adjustment),
+            // confirming it's already placed exactly at the real-world
+            // supply point -- unlike IndustryUnloader/PassengerStop above,
+            // this one genuinely needs no correction.
+            foreach (var loader in UnityEngine.Object.FindObjectsOfType<CarLoadTargetLoader>())
+            {
+                if (loader == null) continue;
+
+                // Best-effort, one loader at a time -- this whole method has
+                // no outer try/catch (EnsureTrackCache doesn't wrap its call
+                // either), so an uncaught exception anywhere in this loop
+                // would abort extraction entirely and leave EVERYTHING
+                // (segments/switches/signals/areas too, already built above)
+                // undelivered for that tick, not just service points.
+                try
+                {
+                    if (loader.load == null) continue;
+
+                    // WaypointQueue matches on load.name.ToLower(), NOT
+                    // load.id -- confirmed the two aren't interchangeable
+                    // here: an earlier version of this code used .id (which
+                    // works fine for IndustryUnloader elsewhere in this
+                    // file) and it silently matched zero loaders. Mirror the
+                    // proven-working mod's exact expression rather than
+                    // assuming equivalence again.
+                    string kind = loader.load.name?.ToLower() switch
+                    {
+                        "water" => "Water",
+                        "coal" => "Coal",
+                        "diesel-fuel" => "Diesel",
+                        _ => null
+                    };
+                    if (kind == null) continue;
+
+                    // GetInstanceID(), NOT loader.name -- confirmed (via a
+                    // one-time diagnostic scan) every CarLoadTargetLoader in
+                    // the game shares the identical GameObject name
+                    // "Loader". Using that as the id meant the client's
+                    // servicePoints Map (keyed by id) silently collapsed all
+                    // 29+ real loaders down to whichever one happened to be
+                    // processed last -- the actual cause of "icons not
+                    // showing", not a matching or position bug at all.
+                    Vector3 pos = WorldTransformer.WorldToGame(loader.transform.position);
+                    network.servicePoints.Add(new ServicePointDto
+                    {
+                        id = $"{kind}_{loader.GetInstanceID()}",
+                        kind = kind,
+                        position = new float[] { pos.x, MapCoordinates.MapZ(pos.z) }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"Could not extract service point from CarLoadTargetLoader '{loader.name}': {ex.Message}");
+                }
+            }
+
+            // 6. EXTRACT PASSENGER STOPS -- the base minimap needs no
+            // dedicated icon for these either, for the same reason as
+            // passenger station buildings generally: it's a literal camera
+            // render of the actual platform geometry. We draw our own icon
+            // since we don't have that 3D geometry to fall back on.
+            // Active-only, same convention as signals/areas: PassengerStop
+            // implements IProgressionDisablable, so ProgressionDisabled is
+            // checked directly rather than relying on GameObject activation.
+            //
+            // One entry PER TRACK SPAN, not per station -- a station with
+            // multiple platform tracks (PassengerStop.TrackSpans can have
+            // more than one) previously collapsed onto a single point via
+            // CenterPoint (which only ever looks at trackSpans[0]), so
+            // stations that unload on more than one track were only ever
+            // getting one icon, at one of their tracks arbitrarily. Each
+            // span's real endpoints (TrackSpan.GetPoints(), already in
+            // game-space -- see the CenterPoint fallback logic in
+            // IndustryComponent for why no WorldToGame call is needed here)
+            // and real Length are sent as-is, letting the client size/orient
+            // the rectangle to the actual platform instead of us baking in
+            // a fixed size or a rotation angle that a Flip X/Z toggle would
+            // invert.
+            foreach (var stop in UnityEngine.Object.FindObjectsOfType<PassengerStop>())
+            {
+                if (stop == null) continue;
+
+                try
+                {
+                    if (stop.ProgressionDisabled) continue;
+
+                    bool anySpan = false;
+                    foreach (var span in stop.TrackSpans)
+                    {
+                        if (span == null) continue;
+
+                        var points = span.GetPoints();
+                        if (points == null || points.Count < 2) continue;
+
+                        anySpan = true;
+                        Vector3 a = points.First();
+                        Vector3 b = points.Last();
+                        network.passengerStops.Add(new PassengerStopDto
+                        {
+                            id = !string.IsNullOrEmpty(span.id) ? span.id : $"{stop.name}_{network.passengerStops.Count}",
+                            name = stop.name,
+                            positionA = new float[] { a.x, MapCoordinates.MapZ(a.z) },
+                            positionB = new float[] { b.x, MapCoordinates.MapZ(b.z) },
+                            length = span.Length
+                        });
+                    }
+
+                    if (!anySpan)
+                    {
+                        // Rare fallback -- a stop with no usable track spans
+                        // at all. CenterPoint here still needs no WorldToGame
+                        // call for the same reason as the spans above.
+                        Vector3 pos = stop.CenterPoint;
+                        network.passengerStops.Add(new PassengerStopDto
+                        {
+                            id = stop.name,
+                            name = stop.name,
+                            positionA = new float[] { pos.x, MapCoordinates.MapZ(pos.z) },
+                            positionB = new float[] { pos.x, MapCoordinates.MapZ(pos.z) },
+                            length = 0f
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"Could not extract passenger stop '{stop.name}': {ex.Message}");
+                }
             }
 
             return new TrackNetworkExtractionResult

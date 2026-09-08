@@ -253,7 +253,26 @@ namespace RailroaderMinimapServer
             if (_cachedTrackJson == null)
             {
                 Log.Info("Building track geometry cache...");
-                TrackNetworkExtractionResult result = TrackExtractor.ExportActiveNetwork(sampleIntervalMeters: 6.0f);
+
+                TrackNetworkExtractionResult result;
+                try
+                {
+                    result = TrackExtractor.ExportActiveNetwork(sampleIntervalMeters: 6.0f);
+                }
+                catch (Exception ex)
+                {
+                    // TrackExtractor has its own per-item try/catch around
+                    // anything read from live game state, but this is a
+                    // last-resort backstop: without it, an exception here
+                    // would leave _cachedTrackJson null forever and retry
+                    // (and fail identically) every single tick, since
+                    // nothing else ever sets it -- silently going dark for
+                    // the rest of the session instead of just skipping this
+                    // one attempt. Same reasoning as the top-level Update()
+                    // catch elsewhere in this file.
+                    Log.Error($"Track extraction threw, track data unavailable this attempt: {ex}");
+                    return;
+                }
 
                 if (result.Network.segments.Count == 0)
                 {
@@ -270,7 +289,7 @@ namespace RailroaderMinimapServer
                 _cachedTrackJson = JsonConvert.SerializeObject(result.Network);
                 SubscribeToSwitchEvents(result.SwitchNodes);
                 SubscribeToSignalEvents(result.Signals);
-                Log.Info($"Cached {result.Network.segments.Count} segments, {result.Network.switches.Count} switches, {result.Network.signals.Count} signals, and {result.Network.areas.Count} areas.");
+                Log.Info($"Cached {result.Network.segments.Count} segments, {result.Network.switches.Count} switches, {result.Network.signals.Count} signals, {result.Network.areas.Count} areas, {result.Network.servicePoints.Count} service points, and {result.Network.passengerStops.Count} passenger stops.");
             }
         }
 
@@ -381,7 +400,17 @@ namespace RailroaderMinimapServer
                     }
                 }
 
-                (int[] destColor, string destName) = isPassenger ? (null, null) : GetDestinationInfo(car);
+                (int[] destColor, string destName, bool? atDestination) = isPassenger ? (null, null, null) : GetDestinationInfo(car);
+
+                bool hasHotbox = car.HasHotbox;
+                bool handbrakeApplied = car.air != null && car.air.handbrakeApplied;
+
+                // Only resolved when actually needed (a hotbox message needs
+                // "which region"), since ClosestArea does a scene-wide
+                // distance scan over every Area -- not worth paying for on
+                // every car, every broadcast tick, when almost none are ever
+                // hotboxed at a given moment.
+                string nearestAreaName = hasHotbox ? GetNearestAreaName(car) : null;
 
                 // PRIMARY: the car's true geometric center, recomputed fresh
                 // from track topology on every call (never a cached/stale
@@ -447,7 +476,11 @@ namespace RailroaderMinimapServer
                         loads = loads,
                         tenderLoads = tenderLoads,
                         destinationColor = destColor,
-                        destinationName = destName
+                        destinationName = destName,
+                        atDestination = atDestination,
+                        hasHotbox = hasHotbox,
+                        handbrakeApplied = handbrakeApplied,
+                        nearestAreaName = nearestAreaName
                     };
                     _lastKnownState[carId] = dto;
                 }
@@ -472,7 +505,11 @@ namespace RailroaderMinimapServer
                         loads = loads,
                         tenderLoads = tenderLoads,
                         destinationColor = destColor,
-                        destinationName = destName
+                        destinationName = destName,
+                        atDestination = atDestination,
+                        hasHotbox = hasHotbox,
+                        handbrakeApplied = handbrakeApplied,
+                        nearestAreaName = nearestAreaName
                     };
                     _lastKnownState[carId] = dto;
                 }
@@ -529,18 +566,19 @@ namespace RailroaderMinimapServer
             return loads;
         }
 
-        private static (int[] color, string name) GetDestinationInfo(Car car)
+        private static (int[] color, string name, bool? atDestination) GetDestinationInfo(Car car)
         {
             try
             {
                 var opsController = OpsController.Shared;
-                if (opsController == null || !car.Waybill.HasValue) return (null, null);
+                if (opsController == null || !car.Waybill.HasValue) return (null, null, null);
 
                 OpsCarPosition destination = car.Waybill.Value.Destination;
                 Area area = opsController.AreaForCarPosition(destination);
                 string name = opsController.NameForPosition(destination);
+                bool isAtDestination = opsController.CarsAtPosition(destination).Contains(car);
 
-                if (area == null) return (null, name);
+                if (area == null) return (null, name, isAtDestination);
 
                 Color c = area.tagColor;
 
@@ -549,7 +587,6 @@ namespace RailroaderMinimapServer
                 // tag color to full brightness while a car is en route, and
                 // dull it once the car has arrived at its destination --
                 // makes "still traveling" vs. "arrived" visually obvious.
-                bool isAtDestination = opsController.CarsAtPosition(destination).Contains(car);
                 if (isAtDestination)
                 {
                     Color.RGBToHSV(c, out float h, out float s, out float v);
@@ -574,14 +611,34 @@ namespace RailroaderMinimapServer
                     Mathf.RoundToInt(Mathf.Clamp01(c.g) * 255f),
                     Mathf.RoundToInt(Mathf.Clamp01(c.b) * 255f)
                 };
-                return (color, name);
+                return (color, name, isAtDestination);
             }
             catch
             {
                 // Best-effort only -- destination resolution touches a lot of
                 // game state we don't fully control; never let this break
                 // the broadcast loop for every other car.
-                return (null, null);
+                return (null, null, null);
+            }
+        }
+
+        // Best-effort "which region is this car in right now" -- distinct
+        // from destinationName (where a car is HEADED). Used for the
+        // hotbox message feed, where "where is this problem" matters more
+        // than the car's waybill.
+        private static string GetNearestAreaName(Car car)
+        {
+            try
+            {
+                var opsController = OpsController.Shared;
+                if (opsController == null) return null;
+
+                Area area = opsController.ClosestArea(car);
+                return area != null ? area.name : null;
+            }
+            catch
+            {
+                return null;
             }
         }
 

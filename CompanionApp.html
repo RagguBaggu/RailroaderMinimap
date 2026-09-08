@@ -184,24 +184,88 @@
   .info-popup .status-thrown { color: var(--thrown); }
   .info-popup .status-normal { color: var(--clear); }
 
+  .message-feed {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 260px;
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: none;
+  }
+  .message-card {
+    pointer-events: auto;
+    position: relative;
+    background: rgba(15, 22, 20, 0.95);
+    border: 1px solid var(--panel-line);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 8px 24px 8px 10px;
+    font-size: calc(11px * var(--ui-scale));
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .message-card .car { font-weight: 600; margin-right: 4px; }
+  .message-card .dismiss {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px;
+  }
+  .message-card .dismiss:hover { color: var(--text); }
+  .message-card.type-hotbox { border-left-color: #ff4d2e; }
+  .message-card.type-delivery { border-left-color: #5aa9e6; }
+  .message-card.type-spotted { border-left-color: #4caf6d; }
+
   .legend {
     position: absolute;
     bottom: 12px;
     left: 12px;
+    max-width: 340px;
     background: rgba(18, 27, 24, 0.85);
     border: 1px solid var(--panel-line);
     border-radius: 4px;
-    padding: 8px 10px;
     font-size: calc(11px * var(--ui-scale));
     color: var(--text-dim);
-    line-height: 1.7;
   }
-  .legend .swatch {
-    display: inline-block;
-    width: calc(9px * var(--ui-scale)); height: calc(9px * var(--ui-scale));
-    border-radius: 50%;
-    margin-right: 6px;
-    vertical-align: middle;
+  .legend-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+  }
+  .legend.collapsed .legend-header { border-bottom: none; }
+  .legend:not(.collapsed) .legend-header { border-bottom: 1px solid var(--panel-line); }
+  .legend-body {
+    padding: 4px 10px 8px;
+    line-height: 1.5;
+    max-height: min(60vh, 440px);
+    overflow-y: auto;
+  }
+  .legend.collapsed .legend-body { display: none; }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-row canvas { flex: none; display: block; }
+  .legend-note {
+    color: var(--text-dim);
+    font-size: 10px;
+    padding: 2px 0 2px 2px;
   }
 
   .side-pane {
@@ -281,20 +345,13 @@
     <canvas id="map"></canvas>
     <div class="zoom-readout" id="zoomReadout">100%</div>
     <div class="info-popup-layer" id="infoPopupLayer"></div>
-    <div class="legend">
-      <div><span class="swatch" style="background:var(--track); border-radius:0; width:14px; height:2px;"></span>track segment</div>
-      <div><span class="swatch" style="background:var(--special-white); border-radius:2px; clip-path: polygon(50% 0%, 100% 35%, 100% 100%, 0% 100%, 0% 35%);"></span>engine / tender</div>
-      <div><span class="swatch" style="background:var(--special-white); border-radius:1px;"></span>passenger car</div>
-      <div><span class="swatch" style="background:linear-gradient(90deg, #e07a5f, #81b29a); border-radius:1px;"></span>freight — vivid = en route, dim = arrived</div>
-      <div><span class="swatch" style="background:var(--freight-idle); border-radius:1px;"></span>freight — no active destination</div>
-      <div><span class="swatch" style="background:var(--live); border-radius:50%; opacity:0.72;"></span>switch — normal (label "CTC" if signal-equipped)</div>
-      <div><span class="swatch" style="background:var(--thrown); border-radius:50%; opacity:0.72;"></span>switch — reversed</div>
-      <div><span class="swatch" style="background:var(--live); border-radius:50%;"></span>signal — top lamp lit = Clear</div>
-      <div><span class="swatch" style="background:var(--signal-amber); border-radius:50%;"></span>signal — middle lamp lit = Approach</div>
-      <div><span class="swatch" style="background:var(--thrown); border-radius:50%;"></span>signal — bottom lamp lit = Stop</div>
-      <div style="color:var(--text-dim); font-size:10px;">(diverging aspects share these lamps; Restricting shows lunar white on bottom)</div>
-      <div style="color:var(--text-dim); font-style:italic;">large text — yard/industry/interchange area name</div>
-      <div style="margin-top:4px; color:var(--text-dim); font-style:italic;">tap a car, switch, or signal for details</div>
+    <div class="message-feed" id="messageFeed"></div>
+    <div class="legend" id="legend">
+      <div class="legend-header" id="legendHeader" title="Click to expand/collapse">
+        <span>LEGEND</span>
+        <span id="legendToggle">▾</span>
+      </div>
+      <div class="legend-body" id="legendBody"></div>
     </div>
   </div>
 
@@ -304,10 +361,25 @@
       <div class="label">Switches</div><div class="value" id="statSwitches">0</div>
       <div class="label">Signals</div><div class="value" id="statSignals">0</div>
       <div class="label">Areas</div><div class="value" id="statAreas">0</div>
+      <div class="label">Service points</div><div class="value" id="statServicePoints">0</div>
+      <div class="label">Passenger stops</div><div class="value" id="statPassengerStops">0</div>
       <div class="label">Cars tracked</div><div class="value" id="statCars">0</div>
       <div class="label">Cars loaded / fallback</div><div class="value" id="statCarsLoaded">0 / 0</div>
       <div class="label">Messages received</div><div class="value" id="statMsgCount">0</div>
       <div class="label">Live-state rate</div><div class="value" id="statRate">0 / s</div>
+    </div>
+    <!-- DEBUG-ONLY: car status badge test buttons. Remove this block (and
+         the debugTest* JS below) once hotbox/handbrake/destination/spotted
+         badges are confirmed working -- purely a client-side visual
+         override for testing, never sent to or read from the server. -->
+    <div class="stats" style="border-top:1px solid var(--border); margin-top:4px; padding-top:8px;">
+      <div class="label" style="grid-column:1/-1; color:var(--text-dim); font-style:italic;">DEBUG: car status badges (first tracked car)</div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:6px; padding:6px 8px;">
+      <button id="debugTestHotboxBtn" style="padding:2px 8px; font-size:10px;">Toggle Hotbox</button>
+      <button id="debugTestHandbrakeBtn" style="padding:2px 8px; font-size:10px;">Toggle Handbrake</button>
+      <button id="debugTestSpottedBtn" style="padding:2px 8px; font-size:10px;">Flash Spotted</button>
+      <button id="debugTestDestinationBtn" style="padding:2px 8px; font-size:10px;">Flash Destination</button>
     </div>
     <div class="log-header">
       <span>MESSAGE LOG</span>
@@ -336,12 +408,27 @@
   const sidePane = $('sidePane');
   const zoomReadout = $('zoomReadout');
   const infoPopupLayer = $('infoPopupLayer');
+  const messageFeedEl = $('messageFeed');
+  const legendEl = $('legend');
+  const legendHeader = $('legendHeader');
+  const legendToggle = $('legendToggle');
+  const legendBody = $('legendBody');
   const clearLogBtn = $('clearLogBtn');
+  const debugTestHotboxBtn = $('debugTestHotboxBtn');
+  const debugTestHandbrakeBtn = $('debugTestHandbrakeBtn');
+  const debugTestSpottedBtn = $('debugTestSpottedBtn');
+  const debugTestDestinationBtn = $('debugTestDestinationBtn');
   const statusDot = $('statusDot');
   const statusText = $('statusText');
   const logEl = $('log');
   const canvas = $('map');
-  const ctx = canvas.getContext('2d');
+  // let, not const -- withTempContext (near the legend code) temporarily
+  // redirects this at a small offscreen canvas so the legend can render
+  // using the exact same drawIcon functions as the real map, instead of a
+  // separate hand-maintained set of legend glyphs that could drift out of
+  // sync with them over time. Every drawX function below reads this
+  // module-level binding via closure rather than taking a ctx parameter.
+  let ctx = canvas.getContext('2d');
 
   // This page is served by the mod's own HTTP server, on the same host and
   // port as the WebSocket endpoint -- so the connection URL never needs to
@@ -368,7 +455,88 @@
   const switches = new Map();  // id -> {id, x, z, isThrown, isCTC}
   const signals = new Map();   // id -> {id, x, z, aspect}
   const areas = new Map();     // id -> {id, name, x, z}
+  const servicePoints = new Map();  // id -> {id, kind: 'Water'|'Coal'|'Diesel', x, z}
+  const passengerStops = new Map(); // id -> {id, name, ax, az, bx, bz, length}
   const cars = new Map();      // id -> {id, x, z, rotationY, loaded}
+
+  // Transient car-status flashes ("just arrived" / "new destination
+  // assigned") -- carId -> {icon: 'Spotted'|'Destination', expiresAt}.
+  // Detected client-side by comparing each live_state tick's atDestination/
+  // destinationName against what was already held for that car (see the
+  // 'live_state' handler below), rather than the server sending one-shot
+  // events -- means a late-joining client just sees nothing to flash yet,
+  // rather than a missed event, and there's no new message type to keep in
+  // sync with the DTOs.
+  const carStatusFlashes = new Map();
+  const STATUS_FLASH_DURATION_MS = 3000;
+
+  function flashCarStatus(carId, icon) {
+    carStatusFlashes.set(carId, { icon, expiresAt: performance.now() + STATUS_FLASH_DURATION_MS });
+  }
+
+  // Message feed -- a DOM-based column of car-status notifications,
+  // separate from the canvas-drawn badges/labels above. 'delivery' and
+  // 'spotted' messages auto-dismiss after MESSAGE_DURATION_MS (or an
+  // earlier manual dismiss); 'hotbox' messages have no expiresAt, so they
+  // only leave via a manual dismiss or removeMessagesForCar() when the
+  // condition actually clears.
+  let messages = [];
+  let nextMessageId = 1;
+  const MESSAGE_DURATION_MS = 6000;
+
+  function cargoSummary(car) {
+    return (car.loads && car.loads.length) ? car.loads.join(', ') : 'empty';
+  }
+
+  // "Engine 1234" for locomotives, "Car 1234" for everything else --
+  // matches how the base game itself distinguishes the two in its own UI.
+  function carOrEngineLabel(car) {
+    return (car.isLocomotive ? 'Engine ' : 'Car ') + shortCarLabel(car);
+  }
+
+  function addMessage(type, carId, text, durationMs) {
+    const id = nextMessageId++;
+    messages.unshift({ id, type, carId, text, expiresAt: durationMs ? performance.now() + durationMs : null });
+    renderMessageFeed();
+  }
+
+  function removeMessage(id) {
+    messages = messages.filter(m => m.id !== id);
+    renderMessageFeed();
+  }
+
+  // type omitted removes every message for that car (used when a car
+  // stops being tracked at all -- decoupled, despawned, save changed).
+  function removeMessagesForCar(carId, type) {
+    const before = messages.length;
+    messages = messages.filter(m => !(m.carId === carId && (!type || m.type === type)));
+    if (messages.length !== before) renderMessageFeed();
+  }
+
+  function pruneExpiredMessages() {
+    const now = performance.now();
+    const before = messages.length;
+    messages = messages.filter(m => m.expiresAt === null || m.expiresAt > now);
+    if (messages.length !== before) renderMessageFeed();
+  }
+
+  function renderMessageFeed() {
+    messageFeedEl.innerHTML = '';
+    for (const m of messages) {
+      const card = document.createElement('div');
+      card.className = `message-card type-${m.type}`;
+      const dismiss = document.createElement('span');
+      dismiss.className = 'dismiss';
+      dismiss.textContent = '×';
+      dismiss.title = 'Dismiss';
+      dismiss.addEventListener('click', () => removeMessage(m.id));
+      const body = document.createElement('div');
+      body.textContent = m.text;
+      card.appendChild(dismiss);
+      card.appendChild(body);
+      messageFeedEl.appendChild(card);
+    }
+  }
 
   // View transform (world -> screen). Starts as the auto-fit transform when
   // track data arrives, then zoom/pan mutate it directly in place.
@@ -507,12 +675,27 @@
         for (const a of (msg.areas || [])) {
           areas.set(a.id, { id: a.id, name: a.name, x: a.position[0], z: a.position[1] });
         }
+        servicePoints.clear();
+        for (const sp of (msg.servicePoints || [])) {
+          servicePoints.set(sp.id, { id: sp.id, kind: sp.kind, x: sp.position[0], z: sp.position[1] });
+        }
+        passengerStops.clear();
+        for (const ps of (msg.passengerStops || [])) {
+          passengerStops.set(ps.id, {
+            id: ps.id, name: ps.name,
+            ax: ps.positionA[0], az: ps.positionA[1],
+            bx: ps.positionB[0], bz: ps.positionB[1],
+            length: ps.length
+          });
+        }
         transform = null; // recompute fit on next draw
         $('statSegments').textContent = segments.length;
         $('statSwitches').textContent = switches.size;
         $('statSignals').textContent = signals.size;
         $('statAreas').textContent = areas.size;
-        log('RECV', `track_network — ${segments.length} segments, ${switches.size} switches, ${signals.size} signals, ${areas.size} areas`);
+        $('statServicePoints').textContent = servicePoints.size;
+        $('statPassengerStops').textContent = passengerStops.size;
+        log('RECV', `track_network — ${segments.length} segments, ${switches.size} switches, ${signals.size} signals, ${areas.size} areas, ${servicePoints.size} service points, ${passengerStops.size} passenger stops`);
         break;
 
       case 'signal_aspect':
@@ -533,11 +716,40 @@
         // than only ever adding to it.
         const seenCarIds = new Set();
         for (const c of (msg.rollingStock || [])) {
+          // Detect just-arrived / newly-assigned-destination transitions by
+          // comparing against the car's previous tick, not just its current
+          // state -- atDestination/destinationName being *true*/*set* is a
+          // persistent fact (would re-flash on every message otherwise),
+          // only the moment it *changes* is the transient event.
+          const prev = cars.get(c.id);
+          if (prev) {
+            if (!prev.atDestination && c.atDestination) {
+              flashCarStatus(c.id, 'Spotted');
+              addMessage('spotted', c.id, `${shortCarLabel(c)}: spotted at ${c.destinationName || 'destination'} (${cargoSummary(c)})`, MESSAGE_DURATION_MS);
+            } else if (c.atDestination === false && c.destinationName && c.destinationName !== prev.destinationName) {
+              flashCarStatus(c.id, 'Destination');
+              addMessage('delivery', c.id, `${shortCarLabel(c)}: heading to ${c.destinationName} (${cargoSummary(c)})`, MESSAGE_DURATION_MS);
+            }
+
+            // Hotbox messages are level-based, not edge-only like the two
+            // above: one appears the moment it starts, and is removed
+            // automatically the moment it actually clears (not on a timer),
+            // matching the "stays until resolved" badge/label treatment.
+            if (!prev.hasHotbox && c.hasHotbox) {
+              addMessage('hotbox', c.id, `${carOrEngineLabel(c)} is currently hotboxed${c.nearestAreaName ? ' near ' + c.nearestAreaName : ''}`, null);
+            } else if (prev.hasHotbox && !c.hasHotbox) {
+              removeMessagesForCar(c.id, 'hotbox');
+            }
+          }
           cars.set(c.id, c);
           seenCarIds.add(c.id);
         }
         for (const id of Array.from(cars.keys())) {
-          if (!seenCarIds.has(id)) cars.delete(id);
+          if (!seenCarIds.has(id)) {
+            cars.delete(id);
+            carStatusFlashes.delete(id);
+            removeMessagesForCar(id);
+          }
         }
 
         updateCarStats();
@@ -836,6 +1048,242 @@
     ctx.restore();
   }
 
+  const STATUS_BADGE_RADIUS = 10; // px -- fixed, not zoom-scaled, so badges stay legible at any zoom
+  const STATUS_BADGE_OFFSET = STATUS_BADGE_RADIUS * 1.6;      // hotbox/handbrake side offset from car center
+  const STATUS_FLASH_OFFSET = STATUS_BADGE_RADIUS * 3.2;      // transient badge offset (straight up)
+  const HANDBRAKE_BADGE_MIN_RADIUS = 2.5; // px -- floor for the zoom-scaled handbrake badge, see drawCarStatusBadges
+
+  const HOTBOX_COLOR = '#ff4d2e';
+  const HANDBRAKE_COLOR = '#9d6fd8'; // matches the base game's own handbrake icon color
+  const SPOTTED_COLOR = '#4caf6d';
+  const DELIVERY_COLOR = '#5aa9e6'; // "new destination assigned"
+
+  // Small filled circle with a 1px dark outline, matching the icon-badge
+  // style used for switches/signals. Returns nothing; caller sets fillStyle.
+  function drawBadgeCircle(sx, sz, r) {
+    ctx.beginPath();
+    ctx.arc(sx, sz, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  const SERVICE_POINT_COLORS = { Water: '#3d8fd1', Coal: '#2b2b2b', Diesel: '#e0862f' };
+
+  // Locomotive supply points -- water/coal/diesel -- as a colored circle
+  // (same STATUS_BADGE_RADIUS size as the car status badges) with a small
+  // glyph whose SHAPE differs per kind, not just its color, so they stay
+  // distinguishable for colorblind users: a droplet for water, a jagged
+  // lump for coal, a diamond for diesel.
+  function drawServicePointIcon(sx, sz, kind) {
+    const r = STATUS_BADGE_RADIUS;
+    ctx.save();
+    ctx.fillStyle = SERVICE_POINT_COLORS[kind] || '#888';
+    drawBadgeCircle(sx, sz, r);
+
+    if (kind === 'Water') {
+      ctx.fillStyle = '#bfe3ff';
+      ctx.beginPath();
+      ctx.moveTo(sx, sz - r * 0.55);
+      ctx.quadraticCurveTo(sx + r * 0.45, sz + r * 0.1, sx, sz + r * 0.55);
+      ctx.quadraticCurveTo(sx - r * 0.45, sz + r * 0.1, sx, sz - r * 0.55);
+      ctx.fill();
+    } else if (kind === 'Coal') {
+      ctx.fillStyle = '#6b6b6b';
+      ctx.beginPath();
+      ctx.moveTo(sx - r * 0.4, sz + r * 0.3);
+      ctx.lineTo(sx - r * 0.45, sz - r * 0.15);
+      ctx.lineTo(sx - r * 0.05, sz - r * 0.5);
+      ctx.lineTo(sx + r * 0.35, sz - r * 0.2);
+      ctx.lineTo(sx + r * 0.4, sz + r * 0.35);
+      ctx.lineTo(sx, sz + r * 0.5);
+      ctx.closePath();
+      ctx.fill();
+    } else if (kind === 'Diesel') {
+      ctx.fillStyle = '#ffd9a0';
+      ctx.beginPath();
+      ctx.moveTo(sx, sz - r * 0.55);
+      ctx.lineTo(sx + r * 0.5, sz);
+      ctx.lineTo(sx, sz + r * 0.55);
+      ctx.lineTo(sx - r * 0.5, sz);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  const PASSENGER_STOP_HEIGHT = 12;    // px -- short axis (platform width approximation), fixed
+  const PASSENGER_STOP_MIN_LENGTH = 16; // px -- floor so a very short/zero-length span still reads as a marker
+  const PASSENGER_STOP_COLOR = '#d9c17a';
+
+  // Passenger station platform -- deliberately rectangular (vs. every other
+  // marker on the map being circular) so it's unmistakable at a glance.
+  // Takes the two track-span endpoints (already toScreen()-transformed by
+  // the caller) rather than a center point, and derives rotation/length
+  // from them directly -- this naturally stays correct across zoom and the
+  // Flip X/Z toggles, unlike a rotation angle computed once server-side
+  // would (a flip would invert it). One call per platform TRACK, not per
+  // station -- a station with multiple platform tracks now draws multiple
+  // rectangles instead of collapsing onto a single point.
+  function drawPassengerStopIcon(sxA, szA, sxB, szB) {
+    const dx = sxB - sxA, dz = szB - szA;
+    const w = Math.max(Math.hypot(dx, dz), PASSENGER_STOP_MIN_LENGTH);
+    const h = PASSENGER_STOP_HEIGHT;
+    const angle = Math.atan2(dz, dx);
+    const cx = (sxA + sxB) / 2, cz = (szA + szB) / 2;
+
+    ctx.save();
+    ctx.translate(cx, cz);
+    ctx.rotate(angle);
+    ctx.fillStyle = PASSENGER_STOP_COLOR;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.lineWidth = 1;
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(-w / 2, -h / 2, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+      ctx.strokeRect(-w / 2, -h / 2, w, h);
+    }
+    ctx.fillStyle = '#2b2416';
+    ctx.font = `${h * 0.75}px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('P', 0, 0.5);
+    ctx.restore();
+  }
+
+  // Persistent, obvious problem indicators (hasHotbox/handbrakeApplied stay
+  // true until the player actually fixes them, unlike the transient arrival/
+  // destination flashes below) plus the transient ones, all drawn in plain
+  // screen space -- unlike drawCarIcon, these never rotate with the car, so
+  // they stay upright and always readable regardless of heading.
+  // DEBUG-ONLY: client-side overrides for the "Toggle Hotbox"/"Toggle
+  // Handbrake" test buttons -- kept separate from the `cars` Map itself
+  // since each live_state tick wholesale-replaces a car's entry (see the
+  // 'live_state' handler), which would otherwise wipe a manually-forced
+  // flag within ~100ms. Remove alongside the debug button block above.
+  const debugForcedHotbox = new Set();
+  const debugForcedHandbrake = new Set();
+
+  // The single color a car's name label should switch to, matching
+  // whichever alert is currently most important for that car -- hotbox
+  // (a real mechanical problem) outranks handbrake, which outranks the
+  // transient arrival/destination flashes. Null means "no active alert,
+  // use the normal label color."
+  function getCarAlertColor(car) {
+    if (car.hasHotbox || debugForcedHotbox.has(car.id)) return HOTBOX_COLOR;
+    if (car.handbrakeApplied || debugForcedHandbrake.has(car.id)) return HANDBRAKE_COLOR;
+    const flash = carStatusFlashes.get(car.id);
+    if (flash) return flash.icon === 'Spotted' ? SPOTTED_COLOR : DELIVERY_COLOR;
+    return null;
+  }
+
+  // The four badge glyphs, extracted into their own functions so the
+  // legend can render exactly these (not a re-implementation that could
+  // drift out of sync) at a fixed reference size, in addition to their
+  // normal use scaled/positioned per-car below. Each assumes the caller
+  // has already ctx.save()'d and will ctx.restore() afterward.
+  function drawHotboxGlyph(cx, cz, r) {
+    ctx.fillStyle = HOTBOX_COLOR;
+    drawBadgeCircle(cx, cz, r);
+    // Simple flame glyph: a teardrop formed from two curves meeting at a point.
+    ctx.fillStyle = '#ffd166';
+    ctx.beginPath();
+    ctx.moveTo(cx, cz - r * 0.7);
+    ctx.quadraticCurveTo(cx + r * 0.5, cz, cx, cz + r * 0.7);
+    ctx.quadraticCurveTo(cx - r * 0.5, cz, cx, cz - r * 0.7);
+    ctx.fill();
+  }
+
+  function drawHandbrakeGlyph(cx, cz, r) {
+    ctx.fillStyle = HANDBRAKE_COLOR;
+    drawBadgeCircle(cx, cz, r);
+    // Simple wheel glyph: a small hub with four spokes.
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (const angle of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {
+      ctx.moveTo(cx, cz);
+      ctx.lineTo(cx + Math.cos(angle) * r * 0.6, cz + Math.sin(angle) * r * 0.6);
+    }
+    ctx.stroke();
+  }
+
+  function drawSpottedGlyph(cx, cz, r) {
+    ctx.fillStyle = SPOTTED_COLOR;
+    drawBadgeCircle(cx, cz, r);
+    // Checkmark
+    ctx.strokeStyle = '#0b1210';
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.45, cz);
+    ctx.lineTo(cx - r * 0.1, cz + r * 0.35);
+    ctx.lineTo(cx + r * 0.5, cz - r * 0.45);
+    ctx.stroke();
+  }
+
+  function drawDeliveryGlyph(cx, cz, r) {
+    ctx.fillStyle = DELIVERY_COLOR;
+    drawBadgeCircle(cx, cz, r);
+    // Right-pointing arrow
+    ctx.fillStyle = '#0b1210';
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.5, cz - r * 0.5);
+    ctx.lineTo(cx - r * 0.5, cz + r * 0.5);
+    ctx.lineTo(cx + r * 0.5, cz);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawCarStatusBadges(sx, sz, car) {
+    const r = STATUS_BADGE_RADIUS;
+
+    if (car.hasHotbox || debugForcedHotbox.has(car.id)) {
+      // Gentle pulse (not a hard blink) so it reads as "urgent" without
+      // being distracting among dozens of cars.
+      const pulse = 0.65 + 0.35 * Math.sin(performance.now() / 200);
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      drawHotboxGlyph(sx - STATUS_BADGE_OFFSET, sz - STATUS_BADGE_OFFSET, r);
+      ctx.restore();
+    }
+
+    if (car.handbrakeApplied || debugForcedHandbrake.has(car.id)) {
+      // Unlike every other badge here, the handbrake indicator scales with
+      // zoom instead of staying a fixed screen size -- it's just a
+      // convenience note, not something that needs to stay prominent when
+      // zoomed way out. Treated as a fixed WORLD size (scales the same way
+      // car icons do, proportional to transform.scale relative to the
+      // fit-to-window baseline), clamped so it never disappears entirely or
+      // grows past the other badges' normal size.
+      const zoomScale = (transform && baseScale) ? transform.scale / baseScale : 1;
+      const hr = clamp(STATUS_BADGE_RADIUS * zoomScale, HANDBRAKE_BADGE_MIN_RADIUS, STATUS_BADGE_RADIUS);
+      ctx.save();
+      drawHandbrakeGlyph(sx + STATUS_BADGE_OFFSET, sz - STATUS_BADGE_OFFSET, hr);
+      ctx.restore();
+    }
+
+    const flash = carStatusFlashes.get(car.id);
+    if (flash) {
+      if (performance.now() >= flash.expiresAt) {
+        carStatusFlashes.delete(car.id);
+        return;
+      }
+      ctx.save();
+      if (flash.icon === 'Spotted') {
+        drawSpottedGlyph(sx, sz - STATUS_FLASH_OFFSET, r);
+      } else {
+        drawDeliveryGlyph(sx, sz - STATUS_FLASH_OFFSET, r);
+      }
+      ctx.restore();
+    }
+  }
+
   // Short display label for a car -- just the road number (last token of
   // "REPORTINGMARK NUMBER"), matching how the in-game minimap labels engines.
   function shortCarLabel(car) {
@@ -890,7 +1338,7 @@
   // a small dark pill, anchored below a given screen point. fontPx defaults
   // to the ordinary train-label size (scaled by uiScale); callers that need
   // a different size (e.g. area labels) pass their own.
-  function drawLabel(sx, sz, text, fontPx = 10 * uiScale) {
+  function drawLabel(sx, sz, text, fontPx = 10 * uiScale, textColor = '#d9e3dd') {
     if (!text) return;
     ctx.save();
     ctx.font = `${fontPx}px "JetBrains Mono", monospace`;
@@ -910,7 +1358,7 @@
     } else {
       ctx.fillRect(sx - w / 2, sz - h / 2, w, h);
     }
-    ctx.fillStyle = '#d9e3dd';
+    ctx.fillStyle = textColor;
     ctx.fillText(text, sx, sz + 0.5);
     ctx.restore();
   }
@@ -977,6 +1425,20 @@
       drawSignalIcon(sx, sz, sg.aspect);
     }
 
+    // Service points (water/coal/diesel) and passenger stops -- static
+    // infrastructure markers, drawn after signals so they sit above the
+    // track but below cars (which still need to read clearly on top when
+    // stopped at one of these).
+    for (const sp of servicePoints.values()) {
+      const [sx, sz] = toScreen(sp.x, sp.z);
+      drawServicePointIcon(sx, sz, sp.kind);
+    }
+    for (const ps of passengerStops.values()) {
+      const [sxA, szA] = toScreen(ps.ax, ps.az);
+      const [sxB, szB] = toScreen(ps.bx, ps.bz);
+      drawPassengerStopIcon(sxA, szA, sxB, szB);
+    }
+
     // Cars -- icons first, then all engine labels in a second pass, so a
     // label always renders on top of every icon rather than being buried
     // under whichever car happened to be drawn after it.
@@ -988,9 +1450,19 @@
       drawCarIcon(sx, sz, rad, !!car.isLocomotive, !!car.isTender, carFillColor(car), car.lengthUnits);
     }
     for (const rc of renderedCars) {
+      const alertColor = getCarAlertColor(rc.car);
+      // Engines always show their label; it just recolors to match an
+      // active alert (and back to normal once resolved). Other cars have no
+      // label at all normally -- one only appears while an alert is active,
+      // and disappears again once it clears, same as the badges.
       if (rc.car.isLocomotive) {
-        drawLabel(rc.sx, rc.sz + 16, shortCarLabel(rc.car));
+        drawLabel(rc.sx, rc.sz + 16, shortCarLabel(rc.car), undefined, alertColor || undefined);
+      } else if (alertColor) {
+        drawLabel(rc.sx, rc.sz + 16, shortCarLabel(rc.car), undefined, alertColor);
       }
+    }
+    for (const rc of renderedCars) {
+      drawCarStatusBadges(rc.sx, rc.sz, rc.car);
     }
 
     // Area (yard/industry/interchange) name labels -- drawn last, after
@@ -1005,7 +1477,7 @@
   }
 
   // Periodic redraw to keep the live-state rate stat fresh even between messages
-  setInterval(() => { updateCarStats(); }, 500);
+  setInterval(() => { updateCarStats(); pruneExpiredMessages(); }, 500);
 
   connectBtn.addEventListener('click', reconnectNow);
 
@@ -1035,6 +1507,61 @@
   clearLogBtn.addEventListener('click', () => {
     logEl.innerHTML = '';
     logShown = 0;
+  });
+
+  // DEBUG-ONLY: see the block comment above the debugForcedHotbox/
+  // debugForcedHandbrake declarations. Remove alongside the HTML buttons
+  // and those two Sets once badge testing is done.
+  function debugFirstTrackedCar() {
+    const car = cars.values().next().value;
+    if (!car) log('DEBUG', 'No tracked cars to test against yet.', true);
+    return car;
+  }
+
+  debugTestHotboxBtn.addEventListener('click', () => {
+    const car = debugFirstTrackedCar();
+    if (!car) return;
+    if (debugForcedHotbox.has(car.id)) {
+      debugForcedHotbox.delete(car.id);
+      removeMessagesForCar(car.id, 'hotbox');
+      log('DEBUG', `Hotbox OFF for ${car.id}`);
+    } else {
+      debugForcedHotbox.add(car.id);
+      addMessage('hotbox', car.id, `${carOrEngineLabel(car)} is currently hotboxed${car.nearestAreaName ? ' near ' + car.nearestAreaName : ''}`, null);
+      log('DEBUG', `Hotbox ON for ${car.id}`);
+    }
+    draw();
+  });
+
+  debugTestHandbrakeBtn.addEventListener('click', () => {
+    const car = debugFirstTrackedCar();
+    if (!car) return;
+    if (debugForcedHandbrake.has(car.id)) {
+      debugForcedHandbrake.delete(car.id);
+      log('DEBUG', `Handbrake OFF for ${car.id}`);
+    } else {
+      debugForcedHandbrake.add(car.id);
+      log('DEBUG', `Handbrake ON for ${car.id}`);
+    }
+    draw();
+  });
+
+  debugTestSpottedBtn.addEventListener('click', () => {
+    const car = debugFirstTrackedCar();
+    if (!car) return;
+    flashCarStatus(car.id, 'Spotted');
+    addMessage('spotted', car.id, `${shortCarLabel(car)}: spotted at ${car.destinationName || 'destination'} (${cargoSummary(car)})`, MESSAGE_DURATION_MS);
+    log('DEBUG', `Flashed Spotted for ${car.id}`);
+    draw();
+  });
+
+  debugTestDestinationBtn.addEventListener('click', () => {
+    const car = debugFirstTrackedCar();
+    if (!car) return;
+    flashCarStatus(car.id, 'Destination');
+    addMessage('delivery', car.id, `${shortCarLabel(car)}: heading to ${car.destinationName || 'destination'} (${cargoSummary(car)})`, MESSAGE_DURATION_MS);
+    log('DEBUG', `Flashed Destination for ${car.id}`);
+    draw();
   });
 
   // --- Zoom & pan ---
@@ -1412,6 +1939,129 @@
     applyAreaLabelScale(scale);
     try {
       localStorage.setItem('minimapAreaLabelScale', String(scale));
+    } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
+  });
+
+  // --- Legend: icon-driven and collapsible ---
+
+  // Temporarily redirects the module-level `ctx` (which every drawX
+  // function reads via closure, not as a parameter) at a different 2D
+  // context, so the legend can render using those exact same functions
+  // instead of a hand-maintained duplicate set of icons that could drift
+  // out of sync with the real map over time.
+  function withTempContext(targetCtx, fn) {
+    const savedCtx = ctx;
+    ctx = targetCtx;
+    try {
+      fn();
+    } finally {
+      ctx = savedCtx;
+    }
+  }
+
+  const LEGEND_ICON_WIDTH = 28;
+  const LEGEND_ICON_HEIGHT = 44;
+  const LEGEND_ICON_CX = 14;
+  const LEGEND_ICON_CY = 24;
+
+  // Rendered once at startup (see buildLegend below), deliberately not
+  // re-rendered on zoom/pan/flip -- these are fixed reference icons, not a
+  // live view of the map, so functions like drawCarIcon that read the
+  // live transform.scale just see it as null/unset at that point and fall
+  // back to their zoomScale=1 default, which is exactly the stable
+  // reference size we want here.
+  const LEGEND_ITEMS = [
+    { draw: (cx, cy) => {
+        ctx.strokeStyle = cssVar('--track');
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx - 12, cy + 8);
+        ctx.lineTo(cx + 12, cy - 8);
+        ctx.stroke();
+      }, text: 'track segment' },
+    { draw: (cx, cy) => drawCarIcon(cx, cy, Math.PI / 2, true, false, cssVar('--special-white'), 20),
+      text: 'engine / tender' },
+    { draw: (cx, cy) => drawCarIcon(cx, cy, Math.PI / 2, false, false, cssVar('--special-white'), 14),
+      text: 'passenger car' },
+    { draw: (cx, cy) => drawCarIcon(cx, cy, Math.PI / 2, false, false, '#e07a5f', 14),
+      text: 'freight — vivid = en route, dim = arrived' },
+    { draw: (cx, cy) => drawCarIcon(cx, cy, Math.PI / 2, false, false, cssVar('--freight-idle'), 14),
+      text: 'freight — no active destination' },
+    { draw: (cx, cy) => drawSwitchIcon(cx, cy, cssVar('--live'), false),
+      text: 'switch — normal (label "CTC" if signal-equipped)' },
+    { draw: (cx, cy) => drawSwitchIcon(cx, cy, cssVar('--thrown'), false),
+      text: 'switch — reversed' },
+    { draw: (cx, cy) => drawSignalIcon(cx, cy, 'Clear'),
+      text: 'signal — top lamp lit = Clear' },
+    { draw: (cx, cy) => drawSignalIcon(cx, cy, 'Approach'),
+      text: 'signal — middle lamp lit = Approach' },
+    { draw: (cx, cy) => drawSignalIcon(cx, cy, 'Stop'),
+      text: 'signal — bottom lamp lit = Stop (diverging aspects share these lamps; Restricting shows lunar white on bottom)' },
+    { note: 'large text — yard/industry/interchange area name' },
+    { draw: (cx, cy) => drawServicePointIcon(cx, cy, 'Water'), text: 'water supply point' },
+    { draw: (cx, cy) => drawServicePointIcon(cx, cy, 'Coal'), text: 'coal supply point' },
+    { draw: (cx, cy) => drawServicePointIcon(cx, cy, 'Diesel'), text: 'diesel supply point' },
+    { draw: (cx, cy) => drawPassengerStopIcon(cx - 12, cy, cx + 12, cy),
+      text: 'passenger station platform (one per platform track)' },
+    { draw: (cx, cy) => drawHotboxGlyph(cx, cy, STATUS_BADGE_RADIUS),
+      text: 'hotbox — badge, label & message stay until resolved/dismissed' },
+    { draw: (cx, cy) => drawHandbrakeGlyph(cx, cy, STATUS_BADGE_RADIUS),
+      text: 'handbrake applied — badge & label stay until released (badge shrinks when zoomed out)' },
+    { draw: (cx, cy) => drawDeliveryGlyph(cx, cy, STATUS_BADGE_RADIUS),
+      text: 'new destination assigned (badge/label/message fade after a few seconds)' },
+    { draw: (cx, cy) => drawSpottedGlyph(cx, cy, STATUS_BADGE_RADIUS),
+      text: 'car spotted at destination (badge/label/message fade after a few seconds)' },
+    { note: 'car name label recolors to match the active alert; engines\' always-shown label does the same' },
+    { note: 'tap a car, switch, or signal for details' },
+  ];
+
+  function buildLegend() {
+    legendBody.innerHTML = '';
+    const dpr = window.devicePixelRatio || 1;
+    for (const item of LEGEND_ITEMS) {
+      if (item.note) {
+        const note = document.createElement('div');
+        note.className = 'legend-note';
+        note.textContent = item.note;
+        legendBody.appendChild(note);
+        continue;
+      }
+      const row = document.createElement('div');
+      row.className = 'legend-row';
+
+      const iconCanvas = document.createElement('canvas');
+      iconCanvas.width = LEGEND_ICON_WIDTH * dpr;
+      iconCanvas.height = LEGEND_ICON_HEIGHT * dpr;
+      iconCanvas.style.width = LEGEND_ICON_WIDTH + 'px';
+      iconCanvas.style.height = LEGEND_ICON_HEIGHT + 'px';
+      const iconCtx = iconCanvas.getContext('2d');
+      iconCtx.scale(dpr, dpr);
+      withTempContext(iconCtx, () => item.draw(LEGEND_ICON_CX, LEGEND_ICON_CY));
+
+      const label = document.createElement('span');
+      label.textContent = item.text;
+
+      row.appendChild(iconCanvas);
+      row.appendChild(label);
+      legendBody.appendChild(row);
+    }
+  }
+
+  buildLegend();
+
+  let legendCollapsed = false;
+  try {
+    legendCollapsed = localStorage.getItem('minimapLegendCollapsed') === 'true';
+  } catch (e) { /* localStorage unavailable -- default to expanded */ }
+  legendEl.classList.toggle('collapsed', legendCollapsed);
+  legendToggle.textContent = legendCollapsed ? '▸' : '▾';
+
+  legendHeader.addEventListener('click', () => {
+    legendCollapsed = !legendCollapsed;
+    legendEl.classList.toggle('collapsed', legendCollapsed);
+    legendToggle.textContent = legendCollapsed ? '▸' : '▾';
+    try {
+      localStorage.setItem('minimapLegendCollapsed', String(legendCollapsed));
     } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
   });
 

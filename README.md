@@ -1,6 +1,6 @@
 # Railroader Minimap Server
 
-A [Unity Mod Manager](https://www.nexusmods.com/site/mods/21) mod for [Railroader](https://store.steampowered.com/app/1683150/Railroader/) that broadcasts live track, switch, signal, and rolling-stock data over a local WebSocket, plus a self-hosted companion web app that renders it as an interactive minimap — on the same PC, or on a phone/tablet next to your monitor.
+A [Unity Mod Manager](https://www.nexusmods.com/site/mods/21) mod for [Railroader](https://store.steampowered.com/app/1683150/Railroader/) that broadcasts live track, switch, signal, area, and rolling-stock data over a local WebSocket, plus a self-hosted companion web app that renders it as an interactive minimap — on the same PC, or on a phone/tablet next to your monitor.
 
 Unlike the game's built-in minimap, this doesn't render the world a second time to draw it, so it doesn't cost you frame rate as you zoom out or as traffic in a yard grows.
 
@@ -10,8 +10,12 @@ Unlike the game's built-in minimap, this doesn't render the world a second time 
 - **Live switch state**, rendered as a ground-throw stand icon (green = normal, red = reversed), pushed instantly when a switch is thrown rather than polled
 - **Tap-to-throw** — tap any non-CTC switch on the map to flip it directly, the same as a plain click on it in-game. CTC-controlled switches are locked out at the track (matching real game behavior) and show their details instead
 - **Real CTC signals** — rendered as a proper signal mast with three lamp heads; the lamp matching the current aspect (Stop/Approach/Clear/Diverging.../Restricting) lights up in the correct color, the other two stay dark, just like a real signal head
+- **Area/location names** — yard, industry, and interchange names, sourced from the exact same labels the base game's own minimap uses, so modded content shows up automatically too. Regions you haven't unlocked yet are excluded on their own; an "Area Label Size" slider keeps them prominent since they're meant to read as map labels, not fine print
+- **Locomotive supply points** — water, coal, and diesel refueling points, each with its own distinct colored/shaped icon (droplet, lump, diamond)
+- **Passenger station platforms** — drawn as a rectangle matching the real platform's length and orientation; a station with more than one platform track gets one rectangle per track instead of a single point
 - **Live car/engine tracking** — every car in the world, including ones whose visual model is currently unloaded (far from the player, mid chunk-load), using the same position source the game's own minimap uses
 - **Destination-based freight coloring** — freight cars are colored using the exact same `Area.tagColor` the base game uses for its own Tab-key destination overlay, vivid while en route and dimmed once arrived. Passenger cars, engines, and tenders render as a plain neutral color instead, matching the base game's own convention of not destination-coloring them
+- **Car status indicators** — a hotbox or an applied handbrake shows as a small badge on the car itself (and recolors its name label) for as long as the problem actually lasts; a car being assigned a new destination, or arriving/being spotted at one, flashes briefly instead. A dismissible message feed logs each of these with the car, cargo, and location involved, so you don't have to be looking at the map when it happens
 - **Cargo details** — tap any car to see what it's carrying and how much, using the game's own formatted quantity strings (e.g. "50,000 lbs Coal")
 - **Tap-for-details** on any car, switch, or signal; a "Pin Engine Info" toggle keeps every locomotive's info panel visible at once
 - **Automatic refresh** — the track cache invalidates and re-broadcasts itself automatically when the track network changes (new track unlocked via milestones, added infrastructure, an ABS/CTC mode switch, etc.) — no manual refresh needed for normal play
@@ -61,16 +65,26 @@ The page connects automatically — there's nothing to type in, no pairing step.
 | Pin every engine's info | "Pin Engine Info" button | same |
 | Reset view | "Reset View" button | same |
 | Fix map orientation | "Flip X" / "Flip Z" buttons | same |
+| Adjust text size | "Text Size" slider | same |
+| Adjust area label size | "Area Label Size" slider | same |
+| Collapse/expand the legend | Click the "LEGEND" header | same |
+| Dismiss a status message | "×" on its card | same |
 
-The "Diagnostics" button reveals a message log and live stats (segment/switch/signal/car counts, message rate) — hidden by default for a cleaner view, useful for troubleshooting.
+The "Diagnostics" button reveals a message log and live stats (segment/switch/signal/area/service-point/passenger-stop/car counts, message rate) — hidden by default for a cleaner view, useful for troubleshooting.
 
 ### Icon legend
+
+The companion app has its own built-in legend (bottom-left, collapsible) that renders using the exact same icon-drawing code as the map itself, so it can't drift out of sync with what you actually see — that's the definitive reference. Briefly, for anyone reading this before launching it:
 
 - **White wedge** — engine or tender
 - **White rectangle** — passenger car
 - **Colored rectangle** — freight car, colored by its waybill destination (vivid = en route, dim = arrived); plain gray if it has no active destination
 - **Circular stand icon** — switch (green = normal, red = reversed); labeled "CTC" underneath if it's signal-controlled and locked out at the track
 - **Signal mast** — top lamp lit = Clear, middle = Approach, bottom = Stop/Restricting (diverging aspects share the same lamp/color)
+- **Large text** — area/location name
+- **Small circle with a droplet/lump/diamond glyph** — water/coal/diesel supply point (shape differs per kind, not just color, so they stay distinguishable if you're colorblind)
+- **Tan rectangle** — passenger station platform, sized to the real platform
+- **Small badge on a car** (flame, wheel, checkmark, or arrow) — hotbox, handbrake, spotted, or new-destination-assigned, matching the message feed
 
 ## Firewall setup (for cross-device use)
 
@@ -102,7 +116,7 @@ This mod's server has **no authentication**. Anyone on your local network can co
 
 ## Known limitations
 
-- **Multiplayer is untested.** Everything here has been built and verified in single-player. Several of the underlying game APIs this mod calls into assert host-only execution internally (`StateManager.AssertIsHost()` and similar show up throughout the decompiled CTC/signal code). Behavior as a non-host client, or with multiple players each running this mod in the same session, is unknown.
+- **Multiplayer is partially confirmed, not fully tested.** A non-host client successfully threw a switch via the companion app in a real multiplayer session — confirming `RequestSetSwitch` correctly round-trips through the game's networking even when initiated by a non-host player, which was the main open risk given how much of the underlying CTC/signal code asserts host-only execution internally (`StateManager.AssertIsHost()` and similar). Other features (CTC/signal state reads, cargo display, car status indicators, live car tracking) haven't been specifically exercised from a non-host client yet, though there's good reason to expect they behave the same way, since the underlying `KeyValueObject` system they read from appears to be the game's general networked-state layer rather than something host-exclusive to read.
 - **This mod is built on decompiled internals, not a public modding API.** A future Railroader update could rename or restructure any of the game classes this relies on (`Graph`, `TrainController`, `OpsController`, `Track.Signals.*`, etc.) without warning. If the mod stops working after a game update, that's the likely cause — check for an updated release before assuming something else is wrong.
 - **UMM's install method matters for this mod specifically**, since it ships two DLLs (the mod itself plus `WebSocketSharp.dll`). This has been tested and confirmed working on the **DoorstopProxy** install method. A [UMM GitHub issue](https://github.com/newman55/unity-mod-manager/issues/133) specifically discusses Railroader mods with more than one DLL not loading correctly under the Assembly injection method — if you're on Assembly injection and the mod doesn't start, try copying `WebSocketSharp.dll` directly into `Railroader_Data\Managed\` instead of the mod's own folder.
 - The companion app's connection URL uses `location.hostname` from the page it's served on — if you're doing something unusual with DNS or a reverse proxy in front of this, you may need to adjust `CompanionApp.html` directly.
@@ -118,10 +132,15 @@ For anyone extending this mod or just curious how it works:
 - **Destination colors** for freight cars come from `Car.Waybill.Value.Destination` → `OpsController.Shared.AreaForCarPosition(...)` → `Area.tagColor`, with the same en-route/arrived brightness adjustment (HSV boost vs. dimming) found in the base game's own destination-coloring logic.
 - **CTC signals** come from `FindObjectsOfType<CTCSignal>()` (active-only — an inactive signal here means "not unlocked this session," unlike cars where inactive means "streamed out"). Aspect comes from `CTCSignal.CurrentAspect`; live changes push via `SignalStorage.ObserveSignalAspect`, reached through `CTCPanelController.Shared.GetComponentInParent<SignalStorage>()`.
 - **Cargo info** comes from `Car.GetLoadInfo(slot)` for each of `Car.Definition.LoadSlots`, resolved to a `Load` via `CarPrototypeLibrary.instance.LoadForId(...)`, formatted with the game's own `Load.QuantityString(quantity)`.
+- **Area/location names** come from `UI.Map.MapLabel` (just a `text` string on a world-positioned Canvas) — the same component the base game's own minimap (`UI.Map.MapBuilder`, a literal top-down camera render of the scene) uses for every name on it. `Model.Ops.Area` looks like the obvious candidate but isn't it at all. Read via the default (non-`includeInactive`) `FindObjectsOfType<MapLabel>()`, which already excludes not-yet-unlocked regions for free, since `Game.Progression.MapFeature` deactivates a locked region's `MapLabel` GameObject via `SetActive(false)` until unlocked. Icon-only labels (TextMeshPro `<sprite name="...">` tags with no real text, e.g. a decorative water-tower marker) are filtered out by stripping rich-text tags and skipping anything left blank.
+- **Locomotive supply points** (water/coal/diesel) come from `RollingStock.CarLoadTargetLoader`, matched on `load.name.ToLower()` (not `.id` — the two aren't interchangeable here). Its `sourceIndustry` field is explicitly nullable ("unlimited loads" when null), which is why water was never reachable through any `Model.Ops.Industry`-based system to begin with, unlike coal/diesel.
+- **Passenger stations** come from `Model.Ops.PassengerStop`, found via `FindObjectsOfType<PassengerStop>()` and filtered by its own `ProgressionDisabled` property. Each of a station's platform tracks (`PassengerStop.TrackSpans`) gets its own rendered rectangle — using that span's real endpoints (`TrackSpan.GetPoints()`) and length — so a multi-track station shows more than one. Rotation is derived client-side from the two endpoints after their screen-space transform, not computed once server-side, so it stays correct across the Flip X/Z toggles.
+- **`.CenterPoint`, not `.transform.position`**, for both `IndustryComponent`-derived types and `PassengerStop` — their raw GameObject transform doesn't reliably line up with the component's actual in-world position, but `CenterPoint` (preferring the first `TrackSpan`'s midpoint when track spans are populated) does. Both branches of its getter already return game-space coordinates internally, so the result must not be run through `WorldTransformer.WorldToGame` a second time.
+- **Car status**: hotbox comes straight from `Car.HasHotbox`; handbrake from `Car.air.handbrakeApplied`. "Newly assigned a destination" and "arrived/spotted" are detected client-side by comparing each `live_state` tick's `atDestination`/`destinationName` against what was already held for that car, rather than the server pushing one-shot events — a dropped frame can't cause a missed transient flash this way.
 - **Coordinate system**: track/switch positions are in the game's "game space" coordinate system (`transform.localPosition`-based for track, `WorldTransformer.WorldToGame(transform.position)` for signals). Car positions from `UpdateMapIconPosition` come back in true world space via an internal `WorldTransformer.GameToWorld` call, so they're converted back with `WorldTransformer.WorldToGame` before being sent out. Everything is then Z-flipped to match the base game map's north-up orientation.
 - <a id="why-two-ports"></a>**Why two ports?** WebSocketSharp's combined `HttpServer` class (which can serve both static files and WebSocket connections from one listener) has a known, unresolved upstream bug ([sta/websocket-sharp#551](https://github.com/sta/websocket-sharp/issues/551)) where static-content responses come back empty in the browser. The companion page is served by a separate, plain `System.Net.HttpListener` instead, while WebSocketSharp's `WebSocketServer` (a completely different, working code path in the same library) continues to handle the `/ws` endpoint.
 - **A Unity `?.` gotcha worth knowing about**: Unity overrides `==`/`!=` on its objects so a destroyed object compares as `null`, but the `?.` null-conditional operator bypasses that override. Code in this project that resolves game singletons uses direct `== null` checks rather than `?.` for exactly this reason — a stale static reference to a destroyed object (e.g. `CTCPanelController.Shared` across a save switch) can otherwise throw `NullReferenceException` deep inside a Unity method call instead of being caught by the null check that looks like it should have caught it.
-- **Message protocol** — every WebSocket message is JSON with a `type` field: `track_network` (segments, switches, and signals, sent on connect or on request), `live_state` (car positions, ~10Hz), `switch_state` (pushed on individual switch throws), `signal_aspect` (pushed on individual signal aspect changes). The client can send `GET_TRACK_DATA` (force a fresh track/switch/signal rebuild) or `SET_SWITCH:<id>` (throw a non-CTC switch).
+- **Message protocol** — every WebSocket message is JSON with a `type` field: `track_network` (segments, switches, signals, areas, service points, and passenger stops, sent on connect or on request), `live_state` (car positions and status, ~10Hz), `switch_state` (pushed on individual switch throws), `signal_aspect` (pushed on individual signal aspect changes). The client can send `GET_TRACK_DATA` (force a fresh rebuild of everything in `track_network`) or `SET_SWITCH:<id>` (throw a non-CTC switch).
 
 ## License
 
@@ -138,3 +157,4 @@ It bundles [websocket-sharp](https://github.com/sta/websocket-sharp) (MIT Licens
   - The entire destination-based freight coloring system, traced from its `TraincarColorUpdater` coroutine back to `OpsController`/`Area.tagColor`
 
   Credit to Map Enhancer's author for figuring these out first — this project's implementation is its own, built from first principles once the right game APIs were identified, but the discovery process leaned directly on that mod's prior work.
+- **WaypointQueue**, a separate community mod that automates Auto Engineer refueling, was the key reference for finding locomotive supply points. An earlier attempt to find water/coal/diesel points via `Model.Ops.IndustryUnloader` was workable for coal/diesel but had no water equivalent at all; studying WaypointQueue's own real, working refueling logic (`RefuelService.CheckNearbyFuelLoaders`) showed `RollingStock.CarLoadTargetLoader` was the actual component to use for all three, sidestepping the industry/waybill economy entirely.

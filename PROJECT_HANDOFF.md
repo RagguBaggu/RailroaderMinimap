@@ -184,6 +184,95 @@ after a game update, these are the exact APIs to re-verify first.
     isn't what gets deactivated on lock -- only its constituent
     `Industry.ProgressionDisabled` flags and unrelated
     `gameObjectsEnableOnUnlock` entries are).
+- **Locomotive supply points (water/coal/diesel) and passenger stations
+  have no base-minimap icon at all** -- both are simply visible as literal
+  3D geometry on the base minimap's real camera render, which our
+  vector-only companion app doesn't have, so both needed a from-scratch
+  data source instead of reusing an existing game marker.
+  - **Water/coal/diesel: `RollingStock.CarLoadTargetLoader`.** Two earlier
+    approaches were tried and abandoned before this one: (a) `MapLabel`'s
+    icon-only `<sprite name="Water">` tag for water -- inconsistently
+    authored across stations, so some were silently unmatched no matter
+    how the text pattern was broadened, and (b) `Model.Ops.IndustryUnloader`
+    (scanning `OpsController.Shared.AllIndustries` ->
+    `Industry.VisibleComponents` for `.load.id` "coal"/"diesel-fuel",
+    filtered to `orderLoads == false` to exclude ordinary
+    industries that *receive* coal as a raw material) -- workable for
+    coal/diesel but had no water equivalent at all, and needed a
+    `.CenterPoint` correction (see below) to line up with the real
+    structure. **`CarLoadTargetLoader` supersedes both entirely** and
+    covers all three loads uniformly: a leaf `MonoBehaviour` placed
+    directly at the physical crane/chute/pump, with its own `Load load`
+    and a `sourceIndustry` field that's explicitly nullable ("if null,
+    unlimited loads are provided") -- exactly why water (free, unlimited)
+    was never reachable through the Industry-based systems above; it was
+    never Industry-linked to begin with, for any of the three loads, not
+    just water. **Match on `load.name.ToLower()` -- NOT `load.id`.**
+    WaypointQueue's own code matches `load?.name?.ToLower()`; an earlier
+    version of this extraction assumed `.id` would be equivalent (it works
+    fine for `IndustryUnloader` elsewhere in this file) and silently
+    matched zero loaders as a result -- confirmed by a temporary
+    diagnostic dump of every found loader's `load.name`, which turned out
+    to already read exactly `"water"`/`"coal"`/`"diesel-fuel"` (lowercase,
+    hyphenated) with no `.ToLower()` even required in practice, just
+    proving `.id` and `.name` are genuinely different fields here, not
+    that one format was wrong. Its raw `.transform.position` is already
+    exactly correct -- no `CenterPoint`-style adjustment needed.
+  - **Every `CarLoadTargetLoader` in the game shares the identical
+    GameObject name `"Loader"`.** Do not use `.name` as a dedup/lookup
+    key for these -- an id built from it (`loader.name`, falling back to
+    the load kind) collapsed all ~29 real loaders down to whichever one
+    happened to be processed last once the client's `Map` (keyed by that
+    id) deduplicated them, which looked exactly like "the icons aren't
+    showing" with no server-side error at all. Use
+    `loader.GetInstanceID()` (or similarly instance-unique data) instead.
+    Confirmed non-obvious enough to cost real back-and-forth diagnosing --
+    worth checking first if a similarly name-keyed marker type goes silently
+    missing again in the future.
+    **Found by decompiling a different mod, not the base game**: the
+    WaypointQueue mod automates real Auto Engineer refueling, so its own
+    fuel-stop detection logic (`RefuelService.CheckNearbyFuelLoaders`) is
+    proven correct by construction -- when a base-game mechanic seems to
+    have no discoverable API and another mod already implements exactly
+    that mechanic, decompiling *that mod's* DLL (same `ilspycmd -r
+    <Managed-dir> -r <mod's-own-dir> <mod>.dll` command, just pointed at
+    the mod folder instead of `Railroader_Data\Managed`) can be more
+    direct than continuing to search the base game alone.
+  - **Passenger stations**: `Model.Ops.PassengerStop` is a distinct type
+    from `Industry` (both extend `GameBehaviour`, but separately) --
+    found directly via `FindObjectsOfType<PassengerStop>()`. It also
+    implements `IProgressionDisablable`, so unlock state is a real
+    `.ProgressionDisabled` property check, not GameObject-active-state
+    like `MapLabel`/`CTCSignal` use. Unlike `CarLoadTargetLoader`, this
+    one DOES need the `.CenterPoint`-over-`.transform.position` fix below.
+  - **Use `.CenterPoint`, not `.transform.position`, for `PassengerStop`
+    (and any `IndustryComponent`, e.g. `IndustryUnloader`, if one gets
+    used again).** Same class of bug as `Car.LocationF` vs.
+    `GetCenterPosition` above -- a real, shipped bug here too, first found
+    when a coal-tower marker (back when `IndustryUnloader` was still in
+    use) rendered nowhere near the actual coal tower. `CenterPoint`'s
+    getter prefers `trackSpans[0].GetCenterPoint()` over the raw transform
+    when any track spans are populated, falling back to
+    `WorldTransformer.WorldToGame(transform.position)` only when they
+    aren't. **Both branches already return game-space coordinates** --
+    unlike most other position reads in this codebase, do NOT wrap a
+    `CenterPoint` result in another `WorldTransformer.WorldToGame` call,
+    or it gets converted twice. (`CarLoadTargetLoader` is a plain leaf
+    MonoBehaviour with no `CenterPoint` property at all -- its transform
+    IS the real position, confirmed by WaypointQueue using it directly.)
+- **AssetRipper (`winget install AssetRipper.AssetRipper`) is fully
+  scriptable via plain HTTP, not just its browser GUI** -- despite
+  shipping as a Blazor-ish local web app, `POST /LoadFolder` and
+  `POST /Export/UnityProject` (both `application/x-www-form-urlencoded`,
+  body `path=<value>`; full spec at `/openapi.json`) do the whole
+  load-then-export-a-Unity-project flow headlessly (`--headless` flag
+  skips auto-opening a browser). Useful whenever a question needs actual
+  binary asset data ilspycmd can't see (textures, ScriptableObject data
+  like a TextMeshPro Sprite Asset's sprite name table) rather than just
+  code. The exported `.asset` files are plain YAML -- e.g. `Assets/
+  Resources/sprites/TMP Railroader Sprites.asset` has the game's complete
+  named-sprite list (`m_SpriteCharacterTable[].m_Name`) straight in text,
+  no image-parsing needed to enumerate it.
 
 ## Resolved gotchas (do not reintroduce these)
 
