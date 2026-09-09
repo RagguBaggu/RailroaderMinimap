@@ -23,15 +23,20 @@ jobs:
 
       - name: Determine version from tag
         id: version
-        shell: pwsh
+        shell: powershell
+        # Add-Content, not "... >> $env:GITHUB_OUTPUT" -- Windows
+        # PowerShell 5.1's redirection operator defaults to UTF-16, which
+        # corrupts GITHUB_OUTPUT (GitHub Actions expects UTF-8). Add-Content
+        # defaults to the system ANSI codepage instead, which is byte-
+        # identical to UTF-8 for the plain-ASCII values used here.
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag -replace '^v', ''
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tag"
 
       - name: Build (Release)
-        shell: pwsh
+        shell: powershell
         run: |
           if (-not $env:RAILROADER_DIR) {
             throw "RAILROADER_DIR is not set on this runner -- see README.md's 'Setting up the release runner' section."
@@ -40,7 +45,7 @@ jobs:
 
       - name: Package release zip
         id: package
-        shell: pwsh
+        shell: powershell
         run: |
           # Staged as release-package/RailroaderMinimapServer/... (not the
           # files loose at the zip root) so extracting the zip drops a
@@ -54,10 +59,10 @@ jobs:
           Copy-Item "$outDir/Info.json" $stageDir
           $zipName = "RailroaderMinimapServer-${{ steps.version.outputs.version }}.zip"
           Compress-Archive -Path $stageDir -DestinationPath $zipName -Force
-          "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "zip_name=$zipName"
 
       - name: Extract changelog section
-        shell: pwsh
+        shell: powershell
         run: |
           ./scripts/Get-ChangelogSection.ps1 -Version "${{ steps.version.outputs.version }}" -OutFile "release-notes.md"
 
