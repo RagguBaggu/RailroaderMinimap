@@ -1,0 +1,71 @@
+name: Release
+
+# Fires on pushing a version tag (e.g. "v0.9.0") -- see README.md's
+# "Cutting a release" section for the full checklist this assumes has
+# already happened (Info.json / PluginVersion bumped, CHANGELOG.md has a
+# matching "## [X.Y.Z]" section, both committed before the tag is created).
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build-and-release:
+    # Must run on a self-hosted runner with Railroader itself installed --
+    # the project only compiles against the game's own DLLs, which can't be
+    # legally redistributed onto a hosted GitHub runner. See README.md's
+    # "Setting up the release runner" section for one-time setup.
+    runs-on: [self-hosted, Windows]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Build (Release)
+        shell: pwsh
+        run: |
+          if (-not $env:RAILROADER_DIR) {
+            throw "RAILROADER_DIR is not set on this runner -- see README.md's 'Setting up the release runner' section."
+          }
+          dotnet build RailroaderMinimap.csproj -c Release -p:RailroaderDir="$env:RAILROADER_DIR"
+
+      - name: Package release zip
+        id: package
+        shell: pwsh
+        run: |
+          # Staged as release-package/RailroaderMinimapServer/... (not the
+          # files loose at the zip root) so extracting the zip drops a
+          # ready-to-use mod folder straight into UMM's Mods\ directory,
+          # matching README.md's Installation instructions exactly.
+          $outDir = "bin/Release/net48"
+          $stageDir = "release-package/RailroaderMinimapServer"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          Copy-Item "$outDir/RailroaderMinimapServer.dll" $stageDir
+          Copy-Item "$outDir/websocket-sharp.dll" $stageDir
+          Copy-Item "$outDir/Info.json" $stageDir
+          $zipName = "RailroaderMinimapServer-${{ steps.version.outputs.version }}.zip"
+          Compress-Archive -Path $stageDir -DestinationPath $zipName -Force
+          "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+
+      - name: Extract changelog section
+        shell: pwsh
+        run: |
+          ./scripts/Get-ChangelogSection.ps1 -Version "${{ steps.version.outputs.version }}" -OutFile "release-notes.md"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          prerelease: true
+          body_path: release-notes.md
+          files: ${{ steps.package.outputs.zip_name }}

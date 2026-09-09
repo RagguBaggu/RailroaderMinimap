@@ -37,12 +37,11 @@ Unlike the game's built-in minimap, this doesn't render the world a second time 
 
 1. **Install Unity Mod Manager**, if you don't already have it, and confirm it's working with Railroader before proceeding — install it, launch the game once, and check that UMM's own installer/log shows Railroader as a recognized, working target.
 
-2. **Create a mod folder** named `RailroaderMinimapServer` inside UMM's `Mods` folder (find this via the UMM installer's own UI, or wherever your other installed UMM mods for Railroader already live).
+2. **Get the mod files**, either way:
+   - **Download a release** from the [Releases page](../../releases) and extract the zip — it contains a ready-to-use `RailroaderMinimapServer` folder.
+   - **Or build it yourself** (see [Releasing](#releasing) below for the build command) and gather `RailroaderMinimapServer.dll`, `WebSocketSharp.dll` (sits alongside the main DLL in your build output), and `Info.json` into a folder named `RailroaderMinimapServer`.
 
-3. **Copy these files** into that folder:
-   - `RailroaderMinimapServer.dll`
-   - `WebSocketSharp.dll` (sits alongside the main DLL in your build output)
-   - `Info.json`
+3. **Move that `RailroaderMinimapServer` folder** into UMM's `Mods` folder (find this via the UMM installer's own UI, or wherever your other installed UMM mods for Railroader already live).
 
 4. **Launch Railroader**, open UMM's mod menu in-game, and confirm "Railroader Minimap Server" shows up and is enabled. Check UMM's log (via its own UI's Log tab, or `Railroader_Data\Managed\UnityModManager\Log.txt`) for:
 
@@ -162,6 +161,70 @@ For anyone extending this mod or just curious how it works:
 - <a id="why-two-ports"></a>**Why two ports?** WebSocketSharp's combined `HttpServer` class (which can serve both static files and WebSocket connections from one listener) has a known, unresolved upstream bug ([sta/websocket-sharp#551](https://github.com/sta/websocket-sharp/issues/551)) where static-content responses come back empty in the browser. The companion page is served by a separate, plain `System.Net.HttpListener` instead, while WebSocketSharp's `WebSocketServer` (a completely different, working code path in the same library) continues to handle the `/ws` endpoint.
 - **A Unity `?.` gotcha worth knowing about**: Unity overrides `==`/`!=` on its objects so a destroyed object compares as `null`, but the `?.` null-conditional operator bypasses that override. Code in this project that resolves game singletons uses direct `== null` checks rather than `?.` for exactly this reason — a stale static reference to a destroyed object (e.g. `CTCPanelController.Shared` across a save switch) can otherwise throw `NullReferenceException` deep inside a Unity method call instead of being caught by the null check that looks like it should have caught it.
 - **Message protocol** — every WebSocket message is JSON with a `type` field: `track_network` (segments, switches, signals, areas, service points, and passenger stops, sent on connect or on request), `live_state` (car positions and status, including each locomotive's Auto Engineer/Waypoint Queue waypoints and whether Waypoint Queue was detected, ~10Hz), `switch_state` (pushed on individual switch throws), `signal_aspect` (pushed on individual signal aspect changes). The client can send `GET_TRACK_DATA` (force a fresh rebuild of everything in `track_network`), `SET_SWITCH:<id>` (throw a non-CTC switch), or `WARP_CAMERA:<x>,<z>` (teleport the in-game camera to a game-space point).
+
+## Releasing
+
+Releases are built and published by a GitHub Actions workflow
+(`.github/workflows/release.yml`) that triggers on pushing a version tag
+(`vX.Y.Z`). It builds the mod, zips the three files a fresh install needs
+(the DLL, `websocket-sharp.dll`, `Info.json`), and publishes a GitHub
+Release marked as a pre-release, with its notes pulled straight from
+[CHANGELOG.md](CHANGELOG.md).
+
+**Why this needs a self-hosted runner:** the project only compiles against
+Railroader's own game DLLs (`Assembly-CSharp.dll`, `UnityEngine.dll`, etc.),
+referenced from a local install — GitHub's hosted runners don't have the
+game, and those DLLs can't be redistributed through the repo or CI to make
+it "just build" there without running into the game's own copyright/ToS.
+The workflow instead runs on a **self-hosted runner** — an agent installed
+on a PC that already legitimately owns the game.
+
+### Setting up the release runner (one-time)
+
+1. In this repo on GitHub: **Settings → Actions → Runners → New self-hosted
+   runner**, choose **Windows**, and follow the download/configure commands
+   it shows you (these include a short-lived registration token, so use
+   them directly from that page rather than copying old ones from
+   elsewhere).
+2. Install it as a Windows service so it's always available, rather than
+   needing a terminal window left open: from the runner's install folder,
+   `./svc.cmd install` then `./svc.cmd start`.
+3. **Set `RAILROADER_DIR` for the runner** — the build overrides the
+   `.csproj`'s own `RailroaderDir` property with this environment variable
+   at build time (`-p:RailroaderDir=...`), so the committed placeholder
+   path never needs to match any particular machine. The runner reads
+   environment variables from a `.env` file in its own install folder (not
+   the system-wide environment), so create one there containing:
+   ```
+   RAILROADER_DIR=D:\path\to\your\Railroader
+   ```
+   then restart the service (`./svc.cmd stop` / `./svc.cmd start`) so it
+   picks the file up.
+4. Confirm `dotnet` (the SDK, not just the runtime) is on `PATH` for
+   whichever account the service runs as — the same one used for local
+   `dotnet build` is fine.
+
+### Cutting a release
+
+1. Bump the version in **both** `Info.json` (`"Version"`) and
+   `MinimapServerCore.cs` (`PluginVersion`) — these are two separate
+   constants with no automatic sync between them.
+2. Add a `## [X.Y.Z] - YYYY-MM-DD` section to the top of
+   [CHANGELOG.md](CHANGELOG.md) (above the previous version, below
+   `## [Unreleased]`) describing what changed. The release workflow reads
+   this section by exact version match — a tag with no matching heading
+   fails the build rather than publishing an empty release.
+3. Commit and push those changes normally.
+4. Tag and push the tag:
+   ```
+   git tag v0.9.0
+   git push origin v0.9.0
+   ```
+   This is what actually triggers the workflow — pushing commits to `master`
+   on its own does not.
+5. Watch the run under the repo's **Actions** tab. Once it finishes, the
+   release (marked pre-release) appears under **Releases** with the zip
+   attached and the changelog section as its notes.
 
 ## License
 
