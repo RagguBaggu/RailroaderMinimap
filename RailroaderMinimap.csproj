@@ -67,8 +67,21 @@
       <HintPath>$(RailroaderDir)\Railroader_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!-- Physics.Raycast/RaycastHit, used by the camera-warp feature to find
+         real ground height at a tapped map point. -->
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="Newtonsoft.Json">
       <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Newtonsoft.Json.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- AutoEngineerPersistence.Orders (Model.AI) is backed by a
+         KeyValueObject, whose type lives in this separate assembly rather
+         than Assembly-CSharp itself. -->
+    <Reference Include="KeyValue.Runtime">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\KeyValue.Runtime.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

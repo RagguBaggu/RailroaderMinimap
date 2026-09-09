@@ -35,6 +35,9 @@ Log.cs                    -- tiny logging abstraction (Action<string> handlers) 
                               core file has zero direct dependency on any loader's logging API
 DataModels.cs             -- all DTOs (plain C# classes) sent over the WebSocket as JSON
 TrackExtractor.cs         -- extracts static track/switch/signal geometry from Graph.Shared
+WaypointQueueBridge.cs    -- reflection-only soft dependency on the third-party "Waypoint
+                              Queue" mod, so this project has no compile-time dependency
+                              on it (see "Key game APIs discovered" below)
 CompanionApp.html         -- the entire client: HTML+CSS+JS in one file, embedded into the
                               DLL as a resource, served by the mod's own HTTP listener
 RailroaderMinimap.csproj  -- single project file (see "Build" below)
@@ -139,14 +142,64 @@ after a game update, these are the exact APIs to re-verify first.
   `Area.tagColor` -- the exact color the base game's own Tab-key destination
   overlay uses. Freight cars use this; engines/tenders/passenger cars
   intentionally don't (matches base game convention).
+- `CameraSelector.shared` (global/unnamed namespace, no `using` needed --
+  confirmed by decompiling that it sits before any `namespace` block in the
+  file) -- `.JumpToPoint(Vector3 gamePoint, Quaternion rotation,
+  CameraIdentifier? cameraIdentifier = null)` teleports whichever camera is
+  currently active (pass `null` for `cameraIdentifier` to mean "whichever
+  one that is" -- it resolves to Strategy or FirstPerson itself, falling
+  back to Strategy from Dispatcher mode; this project always passes `null`
+  since there's no reason for the companion app to force a specific mode).
+  `gamePoint` is in the same game-space (`WorldTransformer`) coordinates as
+  every other position in this codebase. Internally this dispatches to
+  `StrategyCameraController.JumpTo` (the free/orbit camera -- **snaps its
+  own Y to the ground itself** via an internal `SnapToGround` call, so an
+  inaccurate Y here is harmless for this mode) or
+  `PlayerController.JumpTo` (first-person -- a direct
+  `KinematicCharacterMotor.SetPositionAndRotation` teleport with **no**
+  ground-snap of its own, so an inaccurate Y here would leave the character
+  floating or clipped into terrain). Since this project can't know
+  client-side which mode is currently active, ground height is always
+  resolved server-side via `Physics.Raycast(origin, Vector3.down, ...,
+  (1 << Helpers.Layers.Terrain) | (1 << Helpers.Layers.Track))` from high
+  above the target X/Z (the same straight-down-raycast-onto-Terrain pattern
+  the game's own track-carving tools use), so it's correct for both modes
+  regardless of which one actually ends up handling the jump.
+  `Physics`/`RaycastHit` needed adding a `UnityEngine.PhysicsModule` DLL
+  reference to the `.csproj` -- not covered by the existing `UnityEngine`/
+  `UnityEngine.CoreModule` references.
 - `UI.Console.Console` (namespace `UI.Console` -- **must be fully qualified**,
   its bare name collides with `System.Console`). `.shared` static accessor,
-  `.AddLine(string)` to print output, `event Action<string> OnUserInput`
-  fires for every line typed -- **not a registered-command system**, just a
-  raw text firehose any listener can react to. Used for the in-game
-  `minimap`/`minimap_url` console command (also accepts an optional leading
-  `/`, since it wasn't confirmed either way whether the game's own console
-  convention expects one).
+  `.AddLine(string)` to print output. Its `event Action<string> OnUserInput`
+  fires for every line typed, for any listener to react to -- this project's
+  first implementation of the `/minimap` command just listened to that
+  directly, which turned out to have two real bugs: typing the command
+  *without* a leading `/` also got sent as an in-game chat message (the
+  game's own `ConsoleCommandHandler.OnConsoleUserInput` treats any
+  non-`/`-prefixed line as chat, via `StateManager.ApplyLocal(new
+  Say(...))`), and typing it *with* a leading `/` still printed the game's
+  own `"Command not recognized."` first, since raw event listeners can't
+  "consume" an event to stop the game's own handler from also processing
+  the same text. The actual, structured way to add a console command is
+  `UI.Console.IConsoleCommand` (one method, `string Execute(string[]
+  components)`) + `[UI.Console.ConsoleCommand("/name", "description")]` on
+  the implementing class -- **but** `UI.Console.ConsoleCommandHandler.
+  RegisterAllConsoleCommands` auto-discovers these via `Assembly.
+  GetExecutingAssembly().GetTypes()`, which only ever means the *game's*
+  own assembly, never a mod's, no matter how the attribute is applied.
+  Getting a mod's own command in requires reaching
+  `ConsoleCommandHandler`'s private `_commands` field (a plain
+  `Dictionary<string, IConsoleCommand>`, confirmed via decompiling) through
+  reflection and inserting into it directly -- the exact same dictionary
+  its own commands populate themselves into, just reached from outside.
+  Once that live reference is obtained, no further reflection is needed to
+  use it. See `MinimapConsoleCommand`/`TryRegisterConsoleCommand` in
+  `MinimapServerCore.cs`. The attribute is still applied to the mod's own
+  command class even though auto-discovery can't see it, because
+  `UI.Console.Console`'s own `/help` command reads a command's name/
+  description straight off that same attribute via reflection --
+  omitting it would throw a `NullReferenceException` the moment `/help`
+  reached this entry.
 - **`UI.Map.MapLabel` is the actual source of every name shown on the base
   game's own minimap** -- `Model.Ops.Area` is NOT it (a common wrong guess,
   since `Area` looks like the obvious candidate and is otherwise useful for
@@ -260,6 +313,94 @@ after a game update, these are the exact APIs to re-verify first.
     or it gets converted twice. (`CarLoadTargetLoader` is a plain leaf
     MonoBehaviour with no `CenterPoint` property at all -- its transform
     IS the real position, confirmed by WaypointQueue using it directly.)
+- **`Car.CarType` is NOT a locomotive's descriptive class/model name,
+  despite what the property name suggests -- it's a short category code**
+  (e.g. `"LS"` for literally any steam locomotive, `"LD"` for any diesel
+  one, regardless of specific class). Shipped in the Engine Info panel
+  before being caught: every steam engine's "Model" field showed `"LS"`,
+  every diesel's showed `"LD"`. The real display name the game's own UI
+  uses (confirmed by decompiling `TagNameForCar`) is
+  `Car.DefinitionInfo.Metadata.Name` (a public field chain --
+  `DefinitionInfo` is `TypedContainerItem<CarDefinition>`, `.Metadata` is
+  `ObjectMetadata`, `.Name` the actual string, e.g. `"P-48 Pacific"` or
+  `"U30C"`), with `CarType` used only as a fallback when that's empty --
+  same resolution order (`DefinitionInfo.Metadata.Name` first, `CarType`
+  fallback) is now used everywhere this project reads a car's type/model,
+  not just for locomotives, since ordinary freight/passenger cars likely
+  have the same short-code-vs-real-name split. Separately: the game has
+  no distinct "manufacturer/make" field anywhere (checked both
+  `CarDefinition` and `ObjectMetadata` in `Definition.dll`) -- a name like
+  "P-48 Pacific" or "U30C" is just one free-text string as far as the data
+  model goes, nothing to split further.
+- **Auto Engineer's single waypoint order** lives in `Model.AI`:
+  `new AutoEngineerPersistence(car.KeyValueObject).Orders` (a
+  `KeyValueObject`-backed struct; `Car.KeyValueObject` is a public field) ->
+  `.Mode == AutoEngineerMode.Waypoint` + `.Waypoint.HasValue` -> the
+  `OrderWaypoint` struct's public `LocationString` field ->
+  `Graph.Shared.ResolveLocationString(locationString)` (throws
+  `BadLocationException` on a stale/bad string -- wrap in try/catch) ->
+  `Graph.Shared.GetPositionRotation(location).Position`, the same world-space
+  convention `TrackExtractor`'s own segment sampling already uses (not
+  `WorldTransformer.WorldToGame` -- `Location` is a track-graph concept, not
+  a live transform). `AutoEngineerPersistence`/`Orders`/`OrderWaypoint`/
+  `AutoEngineerMode` all live in `Model.AI`, a separate `using` from the
+  `Model` namespace already imported for `Car`. `AutoEngineerPersistence`'s
+  `Orders` property is itself backed by `KeyValueObject` (from a *separate*
+  assembly, `KeyValue.Runtime.dll`, sitting alongside the others in
+  `Managed/`) -- referencing this project's `Orders`/`AutoEngineerPersistence`
+  types at all requires adding an explicit `<Reference Include="KeyValue.Runtime">`
+  to the `.csproj`; without it, the compiler error is a slightly confusing
+  "type is defined in an assembly that is not referenced" pointing at
+  `KeyValueObject`, not at anything in `Model.AI` itself.
+- **The third-party "Waypoint Queue" mod's per-locomotive queue** is reached
+  entirely via reflection (see `WaypointQueueBridge.cs`) since its access
+  point, `WaypointQueue.State.ModStateManager` (a `MonoBehaviour`), is
+  `internal` to `WaypointQueue.dll` -- `Type.GetType("WaypointQueue.State.
+  ModStateManager, WaypointQueue")` still resolves it despite that (assembly-
+  qualified `Type.GetType` ignores accessibility). Its public static `Shared`
+  property gives the live instance; its public `LocoWaypointStates` property
+  is typed `IReadOnlyDictionary<string, LocoWaypointState>` -- that generic
+  *interface* isn't castable to plain `System.Collections.IDictionary`, but
+  the actual backing object returned (confirmed via decompiling: a plain
+  `Dictionary<string, LocoWaypointState>` field) is, so casting the reflected
+  value to `IDictionary` and indexing by locomotive id works without needing
+  reflection for the dictionary access itself. `LocoWaypointState` and
+  `ManagedWaypoint` (in `namespace WaypointQueue`, both public classes,
+  unlike `ModStateManager`) expose `.Waypoints` (`List<ManagedWaypoint>`),
+  and `.Name`/`.StatusLabel`/`.Location` respectively -- all public
+  properties, reached via `PropertyInfo.GetValue`. One shortcut:
+  `ManagedWaypoint.Location`'s declared type is `Track.Location`, a type
+  from the *game's own* `Assembly-CSharp.dll` that this project already
+  hard-references directly -- so the boxed return value can be unboxed with
+  a plain `is Location location` pattern match, no reflection needed for
+  that specific value once retrieved. Mod presence is detected once (cached
+  for the process lifetime) by scanning `AppDomain.CurrentDomain.
+  GetAssemblies()` for an assembly named `"WaypointQueue"` before attempting
+  any of the above, so nothing in this bridge runs (or logs) when the mod
+  isn't installed.
+- **`ManagedWaypoint.StatusLabel` is LIVE execution state, not
+  configuration** -- it defaults to `"Inactive"` and is only ever updated
+  (to things like `"Running to waypoint"`, `"Refueling Coal"`) for whichever
+  single waypoint in the queue is currently being executed; every other
+  queued-but-not-yet-active entry just reads `"Inactive"` regardless of
+  what it's actually set up to do. Initially shipped surfacing only
+  `Name`+`StatusLabel` in the tap popup (a deliberate, discussed choice --
+  see feature list below), which in practice showed nothing useful for any
+  waypoint except the active one. Fixed by adding
+  `WaypointQueueBridge.BuildActionSummary`, which reflects a wider set of
+  `ManagedWaypoint`'s public properties (`CouplingSearchMode`,
+  `UncouplingMode`, `WillRefuel`/`RefuelLoadName`, `WillWait`+its
+  duration/time fields, `WillChangeMaxSpeed`, `StopAtWaypoint`, etc. --
+  confirmed all public via decompiling) into short human-readable action
+  lines describing what the waypoint will actually DO whenever it runs.
+  Several of these are enum-typed, but the enums themselves are nested
+  types private to `WaypointQueue.dll` with no accessible compile-time
+  name -- reading the reflected value's own `.ToString()` (returns the
+  member name, e.g. `"Nearest"`, `"ByCount"`) sidesteps needing one. Given
+  the number of fields involved (~20), they're read via a
+  `Dictionary<string, PropertyInfo>` of ManagedWaypoint's public properties
+  built once, rather than one hand-declared `PropertyInfo` field per
+  property.
 - **AssetRipper (`winget install AssetRipper.AssetRipper`) is fully
   scriptable via plain HTTP, not just its browser GUI** -- despite
   shipping as a Blazor-ish local web app, `POST /LoadFolder` and
@@ -330,6 +471,23 @@ after a game update, these are the exact APIs to re-verify first.
    for this project. If a user reports the mod not loading at all under UMM,
    ask which install method they're on first.
 
+8. **This project has two genuinely different "car id" schemes, and mixing
+   them up fails silently.** `GetStableCarId(car)` (`car.Ident.ToString()`,
+   falling back to `car.id`) is what this project uses for its own DTOs/
+   client-side car identification -- but the *game's own* internal systems
+   (`TrainController._carLookup`, and therefore anything that resolves a
+   locomotive by id via `TrainController.Shared.TryGetCarForId`, which
+   includes WaypointQueue's `LocoWaypointState.LocomotiveId`) are keyed by
+   `car.id` alone. Passing `GetStableCarId(car)` into
+   `WaypointQueueBridge.GetQueuedWaypoints` instead of `car.id` shipped once
+   already: the base game's own single waypoint worked fine (it doesn't go
+   through this lookup at all), but every Waypoint Queue lookup silently
+   returned empty -- no exception, no log line, just an always-empty
+   dictionary lookup -- exactly the kind of bug that looks like "the mod
+   isn't installed" when it actually is. Any future code bridging to
+   another mod's or the game's own id-keyed lookups should use `car.id`
+   directly, not `GetStableCarId`.
+
 ## Feature list (roughly build order)
 
 1. Live track geometry, switch state (color-coded ground-throw icon), car
@@ -345,10 +503,38 @@ after a game update, these are the exact APIs to re-verify first.
    tender's fuel/water.
 7. UMM port (after a period of supporting both loaders, then dropping
    BepInEx entirely).
-8. In-game console command (`minimap`/`minimap_url`) printing connection URLs.
+8. In-game `/minimap` console command (`/minimap_url` alias kept), properly
+   registered into the game's own command system rather than raw-listened
+   for, printing connection URLs.
 9. Client-side "Text Size" slider (100-200%) scaling popups/legend (CSS
    variable) and canvas-drawn train labels (JS font-size multiplier),
    persisted via `localStorage`.
+10. Track grade color-coding (white->yellow->red overlay, toggleable) and
+    tap-bare-track-for-grade popup.
+11. Engine Info panel: toggleable popout with a per-engine dropdown showing
+    type/model/tractive effort/condition/fuel/status, whole-train aggregates
+    (car count, gross weight, combined tractive effort), and an approximate
+    max-tonnage calculation (`TE / (8 + grade% * 20)`) using the grade from
+    the last-tapped point on the track.
+12. Auto Engineer waypoint visualization, scoped to the engine currently
+    selected in the Engine Info panel: the base game's own single
+    `Orders.Waypoint`, plus (if the third-party Waypoint Queue mod is
+    installed, detected via reflection -- see `WaypointQueueBridge.cs`) its
+    full per-locomotive queue in order, each rendered as an oversized arrow
+    icon with a tap-for-status popup (queue entries also show a numbered
+    badge for their position in the queue). The popup shows both the mod's
+    own live status text and a human-readable summary of each waypoint's
+    actually-configured actions (couple/uncouple, refuel, wait, speed
+    change, etc. -- see `BuildActionSummary` above), since status text alone
+    is only ever meaningful for whichever waypoint is currently active. A
+    persistent, dismissible notice in the message feed announces when the
+    mod is detected.
+13. Camera warp: right-click (long-press on touch) any point on the map for
+    a small context menu with a "Warp camera here" option, which teleports
+    whichever in-game camera is currently active (free/Strategy camera, or
+    the first-person character) to that spot -- see `CameraSelector.
+    JumpToPoint` above for the game API, and `HandleWarpCameraCommand` in
+    `MinimapServerCore.cs` for the ground-height raycast this needed.
 
 ## Known open items / not yet done
 

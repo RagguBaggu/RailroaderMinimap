@@ -184,6 +184,95 @@
   .info-popup .status-thrown { color: var(--thrown); }
   .info-popup .status-normal { color: var(--clear); }
 
+  .context-menu {
+    position: absolute;
+    min-width: 180px;
+    background: rgba(15, 22, 20, 0.97);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 4px;
+    font-size: calc(12px * var(--ui-scale));
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    z-index: 10;
+  }
+  .context-menu[hidden] { display: none; }
+  .context-menu-item {
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+    white-space: nowrap;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .context-menu-item:hover,
+  .context-menu-item:active { background: rgba(87, 224, 196, 0.15); }
+
+  .engine-pane {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    width: 300px;
+    max-height: min(75vh, 600px);
+    background: rgba(15, 22, 20, 0.95);
+    border: 1px solid var(--panel-line);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-size: calc(12px * var(--ui-scale));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .engine-pane.hidden { display: none; }
+  .engine-pane-header {
+    padding: 8px 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+    border-bottom: 1px solid var(--panel-line);
+  }
+  .engine-pane-body {
+    padding: 10px;
+    overflow-y: auto;
+  }
+  .engine-pane select {
+    width: 100%;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--panel-line);
+    border-radius: 3px;
+    padding: 4px 6px;
+    margin-bottom: 8px;
+    font-family: inherit;
+    font-size: inherit;
+  }
+  .engine-details .title {
+    color: var(--accent);
+    font-weight: 600;
+    margin: 10px 0 4px;
+  }
+  .engine-details .title:first-child { margin-top: 0; }
+  .engine-details .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text);
+    padding: 1px 0;
+  }
+  .engine-details .row .k { color: var(--text-dim); }
+  .engine-details .status-thrown { color: var(--thrown); }
+  .engine-details .status-normal { color: var(--clear); }
+  .engine-details .note {
+    color: var(--text-dim);
+    font-size: 10px;
+    font-style: italic;
+    margin-top: 6px;
+  }
+  .engine-details .empty {
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
   .message-feed {
     position: absolute;
     top: 12px;
@@ -223,6 +312,7 @@
   .message-card.type-hotbox { border-left-color: #ff4d2e; }
   .message-card.type-delivery { border-left-color: #5aa9e6; }
   .message-card.type-spotted { border-left-color: #4caf6d; }
+  .message-card.type-system { border-left-color: #ffb347; }
 
   .legend {
     position: absolute;
@@ -320,10 +410,12 @@
   <button id="trackBtn" disabled>Refresh Track Data</button>
   <button id="flipXBtn">Flip X</button>
   <button id="flipZBtn">Flip Z</button>
+  <button id="gradeColorBtn" title="Color track by grade % instead of the plain track color">Grade Color</button>
   <button id="zoomInBtn">Zoom In</button>
   <button id="zoomOutBtn">Zoom Out</button>
   <button id="resetViewBtn">Reset View</button>
   <button id="pinEnginesBtn">Pin Engine Info</button>
+  <button id="enginePaneBtn">Engine Info</button>
   <button id="diagBtn">Diagnostics</button>
   <span class="ui-scale-control" title="Scale up train labels, popups, and the legend">
     <label for="uiScaleSlider">Text Size</label>
@@ -345,7 +437,17 @@
     <canvas id="map"></canvas>
     <div class="zoom-readout" id="zoomReadout">100%</div>
     <div class="info-popup-layer" id="infoPopupLayer"></div>
+    <div class="context-menu" id="contextMenu" hidden>
+      <div class="context-menu-item" id="warpCameraItem">📷 Warp camera here</div>
+    </div>
     <div class="message-feed" id="messageFeed"></div>
+    <div class="engine-pane hidden" id="enginePane">
+      <div class="engine-pane-header">ENGINE INFO</div>
+      <div class="engine-pane-body">
+        <select id="engineSelect"><option value="">— select an engine —</option></select>
+        <div class="engine-details" id="engineDetails"><div class="empty">Select an engine above.</div></div>
+      </div>
+    </div>
     <div class="legend" id="legend">
       <div class="legend-header" id="legendHeader" title="Click to expand/collapse">
         <span>LEGEND</span>
@@ -396,11 +498,16 @@
   const trackBtn = $('trackBtn');
   const flipXBtn = $('flipXBtn');
   const flipZBtn = $('flipZBtn');
+  const gradeColorBtn = $('gradeColorBtn');
   const zoomInBtn = $('zoomInBtn');
   const zoomOutBtn = $('zoomOutBtn');
   const resetViewBtn = $('resetViewBtn');
   const diagBtn = $('diagBtn');
   const pinEnginesBtn = $('pinEnginesBtn');
+  const enginePaneBtn = $('enginePaneBtn');
+  const enginePane = $('enginePane');
+  const engineSelect = $('engineSelect');
+  const engineDetails = $('engineDetails');
   const uiScaleSlider = $('uiScaleSlider');
   const uiScaleValue = $('uiScaleValue');
   const areaLabelScaleSlider = $('areaLabelScaleSlider');
@@ -408,6 +515,8 @@
   const sidePane = $('sidePane');
   const zoomReadout = $('zoomReadout');
   const infoPopupLayer = $('infoPopupLayer');
+  const contextMenuEl = $('contextMenu');
+  const warpCameraItem = $('warpCameraItem');
   const messageFeedEl = $('messageFeed');
   const legendEl = $('legend');
   const legendHeader = $('legendHeader');
@@ -483,6 +592,13 @@
   let messages = [];
   let nextMessageId = 1;
   const MESSAGE_DURATION_MS = 6000;
+
+  // Shown once (not per-tick) the first time a live_state message reports
+  // the Waypoint Queue mod as detected server-side -- a 'system' message,
+  // not tied to any car, with no expiresAt so it stays until the user
+  // dismisses it (same "persists until dismissed" treatment as hotbox).
+  let waypointQueueNoticeShown = false;
+  const WAYPOINT_QUEUE_SYSTEM_ID = '__waypointqueue__';
 
   function cargoSummary(car) {
     return (car.loads && car.loads.length) ? car.loads.join(', ') : 'empty';
@@ -709,6 +825,13 @@
         liveStateTimestamps.push(performance.now());
         liveStateTimestamps = liveStateTimestamps.filter(t => performance.now() - t < 2000);
 
+        if (msg.waypointQueueAvailable && !waypointQueueNoticeShown) {
+          waypointQueueNoticeShown = true;
+          addMessage('system', WAYPOINT_QUEUE_SYSTEM_ID,
+            'Waypoint Queue mod detected — its full waypoint queue will be shown (as numbered arrows) for the engine selected in the Engine Info panel.',
+            null);
+        }
+
         // Each broadcast is a full snapshot of every currently-tracked car,
         // not a delta -- anything missing from it has genuinely stopped
         // existing (decoupled, despawned, or a different save entirely was
@@ -810,6 +933,24 @@
   let flipX = false;
   let flipZ = false;
 
+  // Unlike flipX/flipZ above (which reset every reload), this persists --
+  // it's a personal display preference like uiScale/areaLabelScale/legend
+  // collapse state, not a one-off orientation fix.
+  let gradeColorEnabled = false;
+  try {
+    gradeColorEnabled = localStorage.getItem('minimapGradeColor') === 'true';
+  } catch (e) { /* localStorage unavailable -- default to off */ }
+
+  // Engine Info panel state. Not persisted -- unlike gradeColorEnabled,
+  // this is a one-off lookup tool, not a display preference.
+  let enginePaneOpen = false;
+  let selectedEngineId = '';
+  let knownEngineIdsKey = ''; // last-rendered <select> option set, for cheap change detection
+  // The grade at the last-tapped point on bare track (see the track hit-test
+  // in handleTap below), used for the max-tonnage calculation -- null until
+  // the user actually taps somewhere, since there's no sensible default.
+  let lastTappedGrade = null;
+
   function worldToLocal(x, z) {
     return [flipX ? -x : x, flipZ ? -z : z];
   }
@@ -850,10 +991,22 @@
     return [lx * transform.scale + transform.offsetX, lz * transform.scale + transform.offsetY];
   }
 
+  // Exact inverse of toScreen -- used by the right-click/long-press context
+  // menu to recover the map point under the cursor, independent of any
+  // nearby track/car (unlike handleTap's hit-testing, this always resolves
+  // to the raw point under the cursor, since "warp here" should mean
+  // exactly that).
+  function screenToWorld(sx, sz) {
+    const lx = (sx - transform.offsetX) / transform.scale;
+    const lz = (sz - transform.offsetY) / transform.scale;
+    return [flipX ? -lx : lx, flipZ ? -lz : lz];
+  }
+
   // Populated each draw() call, used for tap/click hit-testing
   let renderedCars = [];
   let renderedSwitches = [];
   let renderedSignals = [];
+  let renderedWaypoints = []; // Auto Engineer waypoints for the currently-selected engine (Engine Info panel)
 
   function cssVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -990,6 +1143,31 @@
     return Math.max(min, Math.min(v, max));
   }
 
+  // Grade-color overlay: white at 0%, ramping through yellow and up to red
+  // at GRADE_COLOR_MAX_PERCENT and beyond (clamped). White rather than the
+  // plain --track color (or a gray), so "flat" stands out clearly against
+  // the dark map once this mode is on, distinct from both the background
+  // and the yellow/red ramp. Direction doesn't matter for this -- only
+  // magnitude, since uphill and downhill are equally "steep" for coloring
+  // purposes.
+  const GRADE_COLOR_MAX_PERCENT = 5.0; // matches the steepest grade actually present on the map
+  const GRADE_COLOR_STOPS = [
+    [255, 255, 255], // 0% -- white, stands out better against the dark map than gray did
+    [230, 200, 40],  // half of GRADE_COLOR_MAX_PERCENT -- yellow
+    [214, 48, 42],   // GRADE_COLOR_MAX_PERCENT and beyond -- red
+  ];
+
+  function gradeColor(gradePercent) {
+    const t = clamp(Math.abs(gradePercent) / GRADE_COLOR_MAX_PERCENT, 0, 1) * 2;
+    const [c1, c2, localT] = t < 1
+      ? [GRADE_COLOR_STOPS[0], GRADE_COLOR_STOPS[1], t]
+      : [GRADE_COLOR_STOPS[1], GRADE_COLOR_STOPS[2], t - 1];
+    const r = Math.round(c1[0] + (c2[0] - c1[0]) * localT);
+    const g = Math.round(c1[1] + (c2[1] - c1[1]) * localT);
+    const b = Math.round(c1[2] + (c2[2] - c1[2]) * localT);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
   function drawCarIcon(sx, sz, rad, isLocomotive, isTender, fillColor, realLengthUnits) {
     ctx.save();
     ctx.translate(sx, sz);
@@ -1051,7 +1229,11 @@
   const STATUS_BADGE_RADIUS = 10; // px -- fixed, not zoom-scaled, so badges stay legible at any zoom
   const STATUS_BADGE_OFFSET = STATUS_BADGE_RADIUS * 1.6;      // hotbox/handbrake side offset from car center
   const STATUS_FLASH_OFFSET = STATUS_BADGE_RADIUS * 3.2;      // transient badge offset (straight up)
-  const HANDBRAKE_BADGE_MIN_RADIUS = 2.5; // px -- floor for the zoom-scaled handbrake badge, see drawCarStatusBadges
+  // World units, not px -- the handbrake badge's "true size," scaled by
+  // transform.scale the same way car icons scale lengthUnits. Chosen so it
+  // reaches its max screen size (STATUS_BADGE_RADIUS) around the same zoom
+  // level a typical car icon nears its own max (MAX_ICON_HALF_LENGTH).
+  const HANDBRAKE_BADGE_WORLD_RADIUS = 2.5;
 
   const HOTBOX_COLOR = '#ff4d2e';
   const HANDBRAKE_COLOR = '#9d6fd8'; // matches the base game's own handbrake icon color
@@ -1156,6 +1338,57 @@
     ctx.restore();
   }
 
+  const WAYPOINT_BASE_COLOR = '#5ad1ff';  // base game's own single Auto Engineer order
+  const WAYPOINT_QUEUE_COLOR = '#ffb347'; // Waypoint Queue mod's queued entries
+
+  // An Auto Engineer destination for the currently-selected engine --
+  // deliberately much larger than every other fixed map marker (switch
+  // baseRadius=5, STATUS_BADGE_RADIUS=10) per request, so it reads at a
+  // glance even zoomed well out. A downward-pointing arrow/pin with its tip
+  // exactly at the waypoint's location. queueIndex (1-based) draws a small
+  // numbered badge above it for Waypoint Queue entries, so queue order is
+  // visible without opening the popup; null for the base game's single
+  // order, which has no ordering concept of its own.
+  function drawWaypointArrowIcon(sx, sz, color, queueIndex) {
+    ctx.save();
+    const headHalfWidth = 8.4;
+    const headLen = 14;
+    const tailHalfWidth = 3;
+    const tailLen = 16;
+
+    ctx.fillStyle = color;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, sz);
+    ctx.lineTo(sx - headHalfWidth, sz - headLen);
+    ctx.lineTo(sx - tailHalfWidth, sz - headLen);
+    ctx.lineTo(sx - tailHalfWidth, sz - headLen - tailLen);
+    ctx.lineTo(sx + tailHalfWidth, sz - headLen - tailLen);
+    ctx.lineTo(sx + tailHalfWidth, sz - headLen);
+    ctx.lineTo(sx + headHalfWidth, sz - headLen);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    if (queueIndex != null) {
+      const by = sz - headLen - tailLen - 9;
+      ctx.beginPath();
+      ctx.arc(sx, by, 8, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(11, 18, 16, 0.9)';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px "JetBrains Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(queueIndex), sx, by + 0.5);
+    }
+    ctx.restore();
+  }
+
   // Persistent, obvious problem indicators (hasHotbox/handbrakeApplied stay
   // true until the player actually fixes them, unlike the transient arrival/
   // destination flashes below) plus the transient ones, all drawn in plain
@@ -1257,12 +1490,15 @@
       // Unlike every other badge here, the handbrake indicator scales with
       // zoom instead of staying a fixed screen size -- it's just a
       // convenience note, not something that needs to stay prominent when
-      // zoomed way out. Treated as a fixed WORLD size (scales the same way
-      // car icons do, proportional to transform.scale relative to the
-      // fit-to-window baseline), clamped so it never disappears entirely or
-      // grows past the other badges' normal size.
-      const zoomScale = (transform && baseScale) ? transform.scale / baseScale : 1;
-      const hr = clamp(STATUS_BADGE_RADIUS * zoomScale, HANDBRAKE_BADGE_MIN_RADIUS, STATUS_BADGE_RADIUS);
+      // zoomed way out. Uses the exact same basis as drawCarIcon's own
+      // zoomScale (transform.scale directly) and the same MIN/MAX clamp
+      // range cars use, so it shrinks/grows at the same rate cars do --
+      // an earlier version divided by baseScale (the fit-to-window
+      // reference) instead, which is a completely different, map-size-
+      // dependent basis and made the badge stay near full size across a
+      // much wider zoomed-out range than intended.
+      const zoomScale = (transform && transform.scale) ? transform.scale : 1;
+      const hr = clamp(HANDBRAKE_BADGE_WORLD_RADIUS * zoomScale, MIN_ICON_HALF_LENGTH, STATUS_BADGE_RADIUS);
       ctx.save();
       drawHandbrakeGlyph(sx + STATUS_BADGE_OFFSET, sz - STATUS_BADGE_OFFSET, hr);
       ctx.restore();
@@ -1374,18 +1610,40 @@
 
     updateZoomReadout();
 
-    // Track segments
+    // Track segments -- grade coloring (when enabled) needs a separately
+    // colored stroke per sub-span between consecutive sampled points, so it
+    // can't reuse the single-polyline-per-segment fast path below. Kept as
+    // two separate loops rather than one conditional-per-point loop, since
+    // the plain-color case (the common/default one) stays as cheap as it
+    // was before -- one beginPath/stroke per segment instead of one per
+    // sub-span.
     ctx.shadowBlur = 0;
-    ctx.strokeStyle = cssVar('--track');
     ctx.lineWidth = 1.5;
-    for (const seg of segments) {
-      if (!seg.points || seg.points.length < 2) continue;
-      ctx.beginPath();
-      for (let i = 0; i < seg.points.length; i++) {
-        const [sx, sz] = toScreen(seg.points[i][0], seg.points[i][1]);
-        if (i === 0) ctx.moveTo(sx, sz); else ctx.lineTo(sx, sz);
+    if (gradeColorEnabled) {
+      for (const seg of segments) {
+        if (!seg.points || seg.points.length < 2) continue;
+        for (let i = 0; i < seg.points.length - 1; i++) {
+          const p1 = seg.points[i], p2 = seg.points[i + 1];
+          const [sx1, sz1] = toScreen(p1[0], p1[1]);
+          const [sx2, sz2] = toScreen(p2[0], p2[1]);
+          ctx.strokeStyle = gradeColor(((p1[2] || 0) + (p2[2] || 0)) / 2);
+          ctx.beginPath();
+          ctx.moveTo(sx1, sz1);
+          ctx.lineTo(sx2, sz2);
+          ctx.stroke();
+        }
       }
-      ctx.stroke();
+    } else {
+      ctx.strokeStyle = cssVar('--track');
+      for (const seg of segments) {
+        if (!seg.points || seg.points.length < 2) continue;
+        ctx.beginPath();
+        for (let i = 0; i < seg.points.length; i++) {
+          const [sx, sz] = toScreen(seg.points[i][0], seg.points[i][1]);
+          if (i === 0) ctx.moveTo(sx, sz); else ctx.lineTo(sx, sz);
+        }
+        ctx.stroke();
+      }
     }
 
     // Switches
@@ -1465,6 +1723,41 @@
       drawCarStatusBadges(rc.sx, rc.sz, rc.car);
     }
 
+    // Auto Engineer waypoints -- only for the engine currently selected in
+    // the Engine Info panel (per request: "extend the Engine select
+    // dropdown"), not every locomotive at once, which would clutter the map
+    // and make queue order ambiguous across engines. The Waypoint Queue mod
+    // drives the train BY issuing its active entry through the base game's
+    // own single Orders.Waypoint -- so while it's installed and has
+    // anything queued, that base-game order is just a mirror of whichever
+    // queue entry is currently active, sitting at the exact same position.
+    // Drawing/hit-testing both there would stack two arrows on top of each
+    // other and, worse, let the far-less-informative base-game one silently
+    // win every tap (first-pushed wins hit-test ties) -- exactly what was
+    // happening: tapping a numbered Waypoint Queue arrow kept showing the
+    // generic "Waypoint"/"Waypoint" popup instead of that entry's real
+    // status and configured actions. Only fall back to the base-game arrow
+    // when there's no queue to show instead.
+    renderedWaypoints = [];
+    if (enginePaneOpen && selectedEngineId) {
+      const engineCar = cars.get(selectedEngineId);
+      if (engineCar) {
+        const queued = engineCar.queuedWaypoints || [];
+        if (queued.length > 0) {
+          queued.forEach((wp, i) => {
+            const [sx, sz] = toScreen(wp.position[0], wp.position[1]);
+            drawWaypointArrowIcon(sx, sz, WAYPOINT_QUEUE_COLOR, i + 1);
+            renderedWaypoints.push({ sx, sz, wp, source: 'queue' });
+          });
+        } else if (engineCar.autoEngineerWaypoint) {
+          const wp = engineCar.autoEngineerWaypoint;
+          const [sx, sz] = toScreen(wp.position[0], wp.position[1]);
+          drawWaypointArrowIcon(sx, sz, WAYPOINT_BASE_COLOR, null);
+          renderedWaypoints.push({ sx, sz, wp, source: 'base' });
+        }
+      }
+    }
+
     // Area (yard/industry/interchange) name labels -- drawn last, after
     // every other icon/label, so they always render on top instead of
     // potentially being buried under track/switch/signal/car icons.
@@ -1477,7 +1770,7 @@
   }
 
   // Periodic redraw to keep the live-state rate stat fresh even between messages
-  setInterval(() => { updateCarStats(); pruneExpiredMessages(); }, 500);
+  setInterval(() => { updateCarStats(); pruneExpiredMessages(); refreshEnginePane(); }, 500);
 
   connectBtn.addEventListener('click', reconnectNow);
 
@@ -1501,6 +1794,16 @@
     flipZBtn.classList.toggle('active', flipZ);
     transform = null;
     hideInfoPopup();
+    draw();
+  });
+
+  gradeColorBtn.classList.toggle('active', gradeColorEnabled);
+  gradeColorBtn.addEventListener('click', () => {
+    gradeColorEnabled = !gradeColorEnabled;
+    gradeColorBtn.classList.toggle('active', gradeColorEnabled);
+    try {
+      localStorage.setItem('minimapGradeColor', String(gradeColorEnabled));
+    } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
     draw();
   });
 
@@ -1612,11 +1915,13 @@
   let dragDistance = 0;
 
   canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return; // right/middle button -- leave to the 'contextmenu' handler, don't start a pan
     isPanning = true;
     panStartX = e.clientX;
     panStartY = e.clientY;
     dragDistance = 0;
     hideInfoPopup();
+    hideContextMenu();
     canvas.classList.add('grabbing');
   });
 
@@ -1642,6 +1947,19 @@
 
   // --- Tap-for-details ---
 
+  // Distance from (px,py) to the line segment (x1,y1)-(x2,y2), plus t (0..1)
+  // marking where along it the closest point falls -- used both for the hit
+  // test itself and to interpolate grade between that sub-span's two
+  // endpoints at exactly the tapped point, not just whichever endpoint is
+  // nearer.
+  function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? ((px - x1) * dx + (py - y1) * dy) / lenSq : 0;
+    t = clamp(t, 0, 1);
+    return { dist: Math.hypot(px - (x1 + dx * t), py - (y1 + dy * t)), t };
+  }
+
   function handleTap(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const x = clientX - rect.left;
@@ -1651,11 +1969,28 @@
     let best = null;
     let bestDist = hitRadius;
 
+    // Auto Engineer waypoint arrows -- highest priority of all, checked
+    // first. They're only ever shown for the one engine selected in the
+    // Engine Info panel, deliberately drawn oversized, and rare enough that
+    // overlap with cars/switches essentially never happens in practice.
+    // Hit-tested against the icon's visual center (a bit above its
+    // ground-truth position, where the tip is drawn), not the tip itself,
+    // since the drawn arrow/pin shape extends upward from there.
+    const waypointHitRadius = 20;
+    let bestWaypointDist = waypointHitRadius;
+    for (const rw of renderedWaypoints) {
+      const iconCz = rw.sz - 15;
+      const d = Math.hypot(rw.sx - x, iconCz - y);
+      if (d < bestWaypointDist) { bestWaypointDist = d; best = { kind: 'waypoint', item: rw.wp, sx: rw.sx, sz: iconCz }; }
+    }
+
     // Cars take priority over switches/signals when both are within range,
     // since they're rendered on top and more often the intended target.
-    for (const rc of renderedCars) {
-      const d = Math.hypot(rc.sx - x, rc.sz - y);
-      if (d < bestDist) { bestDist = d; best = { kind: 'car', item: rc.car, sx: rc.sx, sz: rc.sz }; }
+    if (!best) {
+      for (const rc of renderedCars) {
+        const d = Math.hypot(rc.sx - x, rc.sz - y);
+        if (d < bestDist) { bestDist = d; best = { kind: 'car', item: rc.car, sx: rc.sx, sz: rc.sz }; }
+      }
     }
     if (!best) {
       for (const rs of renderedSwitches) {
@@ -1665,6 +2000,36 @@
       for (const rsg of renderedSignals) {
         const d = Math.hypot(rsg.sx - x, rsg.sz - y);
         if (d < bestDist) { bestDist = d; best = { kind: 'signal', item: rsg.sg, sx: rsg.sx, sz: rsg.sz }; }
+      }
+    }
+    // Bare track -- lowest priority of all, checked last, and against a
+    // tighter radius than the point-target hitRadius above (track lines are
+    // thin and dense, so a generous radius here would make it too easy to
+    // grab a track tap instead of a nearby switch/signal/car). Grade is
+    // interpolated between the closest sub-span's two endpoint grades at
+    // the exact tapped point (via that sub-span's own `t`), not just
+    // whichever sampled point happens to be nearest.
+    if (!best) {
+      const trackHitRadius = 8;
+      let bestTrackDist = trackHitRadius;
+      for (const seg of segments) {
+        if (!seg.points || seg.points.length < 2) continue;
+        for (let i = 0; i < seg.points.length - 1; i++) {
+          const p1 = seg.points[i], p2 = seg.points[i + 1];
+          const [sx1, sz1] = toScreen(p1[0], p1[1]);
+          const [sx2, sz2] = toScreen(p2[0], p2[1]);
+          const { dist, t } = pointToSegmentDistance(x, y, sx1, sz1, sx2, sz2);
+          if (dist < bestTrackDist) {
+            bestTrackDist = dist;
+            const g1 = p1[2] || 0, g2 = p2[2] || 0;
+            best = {
+              kind: 'track',
+              item: { id: seg.id, grade: g1 + (g2 - g1) * t },
+              sx: sx1 + (sx2 - sx1) * t,
+              sz: sz1 + (sz2 - sz1) * t
+            };
+          }
+        }
       }
     }
 
@@ -1677,6 +2042,10 @@
         sendSetSwitch(best.item.id);
         hideInfoPopup();
       } else {
+        if (best.kind === 'track') {
+          lastTappedGrade = best.item.grade;
+          refreshEnginePane(); // no-op if the panel isn't open
+        }
         showInfoPopup(best);
       }
     } else {
@@ -1752,6 +2121,166 @@
       `<div class="row"><span class="k">Aspect</span><span>${escapeHtml(sg.aspect || 'Unknown')}</span></div>`;
   }
 
+  function trackPopupHtml(t) {
+    return `<div class="title">Track</div>` +
+      `<div class="row"><span class="k">Grade</span><span>${Math.abs(t.grade).toFixed(1)}%</span></div>`;
+  }
+
+  function waypointPopupHtml(wp) {
+    let html = `<div class="title">🡇 ${escapeHtml(wp.label || 'Waypoint')}</div>`;
+    if (wp.statusLabel) {
+      html += `<div class="row"><span class="k">Status</span><span>${escapeHtml(wp.statusLabel)}</span></div>`;
+    }
+    // Configured instructions (Waypoint Queue only -- null for the base
+    // game's single order) -- what this waypoint actually DOES, distinct
+    // from Status above, which is only ever live execution state and reads
+    // "Inactive" for any waypoint that isn't the one currently running.
+    if (wp.actions && wp.actions.length > 0) {
+      html += wp.actions.map(a => `<div>• ${escapeHtml(a)}</div>`).join('');
+    }
+    return html;
+  }
+
+  // --- Engine Info panel ---
+
+  function formatLbs(lbs) {
+    return Math.round(lbs || 0).toLocaleString() + ' lbs';
+  }
+
+  function formatTons(tons) {
+    return Math.round(tons || 0).toLocaleString() + ' tons';
+  }
+
+  function detailRow(k, v) {
+    return `<div class="row"><span class="k">${k}</span><span>${v}</span></div>`;
+  }
+
+  function currentEngineIds() {
+    const ids = [];
+    for (const car of cars.values()) {
+      if (car.isLocomotive) ids.push(car.id);
+    }
+    ids.sort();
+    return ids;
+  }
+
+  // Rebuilds the <select> options only when the actual set of tracked
+  // engines has changed (cheap string-key comparison), rather than on
+  // every live_state tick -- this runs on the ~10Hz car update cadence
+  // while the panel is open, so rebuilding the DOM unconditionally would
+  // be wasteful for something that only actually changes when an engine
+  // is created/despawned or a different save loads.
+  function refreshEngineSelect() {
+    const ids = currentEngineIds();
+    const idsKey = ids.join('|');
+    if (idsKey === knownEngineIdsKey) return;
+    knownEngineIdsKey = idsKey;
+
+    engineSelect.innerHTML = '<option value="">— select an engine —</option>';
+    for (const id of ids) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = id;
+      engineSelect.appendChild(opt);
+    }
+    if (ids.includes(selectedEngineId)) {
+      engineSelect.value = selectedEngineId;
+    } else {
+      selectedEngineId = '';
+      engineSelect.value = '';
+    }
+  }
+
+  function renderEngineDetails(car) {
+    if (!car) return '<div class="empty">Select an engine above.</div>';
+
+    const statusParts = [];
+    if (car.hasHotbox) statusParts.push('<span class="status-thrown">Hotbox</span>');
+    if (car.handbrakeApplied) statusParts.push('<span class="status-thrown">Handbrake set</span>');
+    const statusHtml = statusParts.length ? statusParts.join(', ') : '<span class="status-normal">Normal</span>';
+
+    // Most steam locomotives carry fuel/water on a separate tender car
+    // (already surfaced here server-side as tenderLoads); diesels carry
+    // their own fuel directly via loads. But not every steam engine has a
+    // tender -- tank engines carry coal/water in a built-in bunker and
+    // tank, using their own loads the same way a diesel does. Combining
+    // both handles all three cases without needing to special-case tank
+    // engines specifically: tenderLoads is simply empty/absent for anything
+    // without a tender, and loads is simply empty for a steam engine that
+    // has one.
+    const fuelLoads = [...(car.loads || []), ...(car.tenderLoads || [])];
+    const fuelHtml = fuelLoads.length ? fuelLoads.map(escapeHtml).join(', ') : '(none)';
+
+    let html = `<div class="title">${escapeHtml(car.id)}</div>`;
+    html += detailRow('Type', escapeHtml(car.locomotiveType || 'Unknown'));
+    html += detailRow('Model', escapeHtml(car.carType || 'Unknown'));
+    html += detailRow('Tractive Effort', car.ratedTractiveEffort ? formatLbs(car.ratedTractiveEffort) : '—');
+    html += detailRow('Condition', Math.round((car.condition || 0) * 100) + '%');
+    html += detailRow('Fuel', fuelHtml);
+    html += detailRow('Status', statusHtml);
+
+    // Just a summary here -- the actual arrow icons (and their tap-for-
+    // status popups) render on the map itself, only while this engine is
+    // the one selected here.
+    const queueCount = (car.queuedWaypoints || []).length;
+    let waypointSummary;
+    if (car.autoEngineerWaypoint && queueCount > 0) {
+      waypointSummary = `Waypoint mode, ${queueCount} queued (Waypoint Queue)`;
+    } else if (car.autoEngineerWaypoint) {
+      waypointSummary = 'Waypoint mode';
+    } else if (queueCount > 0) {
+      waypointSummary = `${queueCount} queued (Waypoint Queue)`;
+    } else {
+      waypointSummary = 'None set';
+    }
+    html += detailRow('Auto Engineer waypoints', waypointSummary);
+    if (car.autoEngineerWaypoint || queueCount > 0) {
+      html += `<div class="note">Shown as arrow icons on the map while this engine is selected.</div>`;
+    }
+
+    html += `<div class="title">Train</div>`;
+    if ((car.trainCarCount || 0) > 0) {
+      html += detailRow('Cars attached', String(car.trainCarCount));
+      html += detailRow('Combined Tractive Effort', formatLbs(car.trainCombinedTractiveEffort));
+      html += detailRow('Gross weight', formatTons(car.trainGrossWeightTons));
+    } else {
+      html += `<div class="empty">Not coupled to any cars.</div>`;
+    }
+
+    // Combined TE already reduces to this engine's own rated TE when it's
+    // not coupled to any other locomotives, so it's always the right value
+    // to use here -- no need to branch on whether this engine is alone.
+    html += `<div class="title">Max Tonnage</div>`;
+    if (lastTappedGrade === null) {
+      html += `<div class="empty">Tap any point on the track to set the grade used for this calculation.</div>`;
+    } else {
+      // Standard "ruling grade" tonnage-rating formula: TE divided by total
+      // resistance-per-ton, where resistance-per-ton = base rolling
+      // resistance + grade resistance (20 lbs/ton per 1% grade -- matches
+      // the game's own internal physics exactly, confirmed by decompiling
+      // Car.GravityForce, which computes this same grade*20 term). The base
+      // resistance of 8 lbs/ton (rather than the nominal 3-5 lbs/ton for
+      // straight, level track) is a community rule-of-thumb standing in for
+      // the extra rolling resistance curves add, found to give reliably
+      // good real-world results despite not being an exact physical value.
+      const te = car.trainCombinedTractiveEffort || car.ratedTractiveEffort || 0;
+      const gradePercent = Math.abs(lastTappedGrade);
+      const maxTons = te / (8 + gradePercent * 20);
+      html += detailRow('Grade used', gradePercent.toFixed(1) + '%');
+      html += detailRow('Max tonnage', formatTons(maxTons));
+      html += `<div class="note">Approximate maximum tonnage this engine (or train, if coupled to others) can start and move at the tapped grade. Tap a different point on the track to update.</div>`;
+    }
+
+    return html;
+  }
+
+  function refreshEnginePane() {
+    if (!enginePaneOpen) return;
+    refreshEngineSelect();
+    const car = selectedEngineId ? cars.get(selectedEngineId) : null;
+    engineDetails.innerHTML = renderEngineDetails(car);
+  }
+
   // Positions a popup near (sx, sz), clamped so it never runs off the
   // visible map area.
   function positionPopup(el, sx, sz) {
@@ -1770,6 +2299,8 @@
     const el = getOrCreatePopup(TAP_POPUP_KEY);
     if (hit.kind === 'car') el.innerHTML = carPopupHtml(hit.item);
     else if (hit.kind === 'signal') el.innerHTML = signalPopupHtml(hit.item);
+    else if (hit.kind === 'track') el.innerHTML = trackPopupHtml(hit.item);
+    else if (hit.kind === 'waypoint') el.innerHTML = waypointPopupHtml(hit.item);
     else el.innerHTML = switchPopupHtml(hit.item);
     positionPopup(el, hit.sx, hit.sz);
   }
@@ -1777,6 +2308,63 @@
   function hideInfoPopup() {
     removePopup(TAP_POPUP_KEY);
   }
+
+  // --- Right-click / long-press context menu (camera warp) ---
+
+  // The map point the menu is currently anchored to, in the client's own
+  // stored (game X, negated game Z) convention -- same as every other
+  // position already flowing through this file. Null while the menu is
+  // closed.
+  let contextMenuWorldPos = null;
+
+  function showContextMenu(clientX, clientY) {
+    if (!transform) return; // no map loaded yet, nothing to warp to
+    hideInfoPopup();
+    const rect = canvas.getBoundingClientRect();
+    const sx = clientX - rect.left;
+    const sz = clientY - rect.top;
+    contextMenuWorldPos = screenToWorld(sx, sz);
+
+    contextMenuEl.hidden = false;
+    const mapRect = canvas.parentElement.getBoundingClientRect();
+    const menuW = contextMenuEl.offsetWidth || 180;
+    const menuH = contextMenuEl.offsetHeight || 40;
+    let left = sx + 4, top = sz + 4;
+    if (left + menuW > mapRect.width - 8) left = sx - menuW - 4;
+    if (top + menuH > mapRect.height - 8) top = sz - menuH - 4;
+    contextMenuEl.style.left = Math.max(4, left) + 'px';
+    contextMenuEl.style.top = Math.max(4, top) + 'px';
+  }
+
+  function hideContextMenu() {
+    contextMenuEl.hidden = true;
+    contextMenuWorldPos = null;
+  }
+
+  canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY);
+  });
+
+  warpCameraItem.addEventListener('click', () => {
+    if (contextMenuWorldPos && ws && ws.readyState === WebSocket.OPEN) {
+      const [x, z] = contextMenuWorldPos;
+      const payload = `${x.toFixed(2)},${z.toFixed(2)}`;
+      ws.send('WARP_CAMERA:' + payload);
+      log('SEND', `WARP_CAMERA:${payload}`);
+    }
+    hideContextMenu();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!contextMenuEl.hidden && !contextMenuEl.contains(e.target)) {
+      hideContextMenu();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideContextMenu();
+  });
 
   // "Pin engine info" toggle -- when active, every locomotive gets a
   // persistent popup that follows it as the map pans/zooms, without needing
@@ -1818,11 +2406,24 @@
 
   // --- Touch: single-finger pan/tap, two-finger pinch-to-zoom ---
 
-  let touchMode = null; // 'pan' | 'pinch' | null
+  let touchMode = null; // 'pan' | 'pinch' | 'longpress' | null
   let touchLastX = 0;
   let touchLastY = 0;
   let pinchLastDist = 0;
   let touchDragDistance = 0;
+
+  // Long-press stands in for right-click on touch devices, opening the same
+  // context menu. Cancelled by any movement past the normal tap threshold,
+  // by a second finger joining (pinch), or by lifting early.
+  const LONG_PRESS_MS = 550;
+  let longPressTimer = null;
+
+  function cancelLongPress() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
 
   function touchDistance(touches) {
     const dx = touches[0].clientX - touches[1].clientX;
@@ -1840,11 +2441,19 @@
   canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
     hideInfoPopup();
+    hideContextMenu();
+    cancelLongPress();
     if (e.touches.length === 1) {
       touchMode = 'pan';
       touchLastX = e.touches[0].clientX;
       touchLastY = e.touches[0].clientY;
       touchDragDistance = 0;
+      const pressX = e.touches[0].clientX, pressY = e.touches[0].clientY;
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        touchMode = 'longpress'; // stops touchend below from also firing a tap
+        showContextMenu(pressX, pressY);
+      }, LONG_PRESS_MS);
     } else if (e.touches.length === 2) {
       touchMode = 'pinch';
       pinchLastDist = touchDistance(e.touches);
@@ -1862,10 +2471,12 @@
       touchDragDistance += Math.abs(dx) + Math.abs(dy);
       touchLastX = e.touches[0].clientX;
       touchLastY = e.touches[0].clientY;
+      if (touchDragDistance >= TAP_THRESHOLD_PX) cancelLongPress();
       transform.offsetX += dx;
       transform.offsetY += dy;
       draw();
     } else if (touchMode === 'pinch' && e.touches.length === 2) {
+      cancelLongPress();
       const newDist = touchDistance(e.touches);
       const [mx, my] = touchMidpoint(e.touches, rect);
       zoomAt(mx, my, newDist / pinchLastDist);
@@ -1874,6 +2485,7 @@
   }, { passive: false });
 
   canvas.addEventListener('touchend', (e) => {
+    cancelLongPress();
     if (e.touches.length === 0) {
       if (touchMode === 'pan' && touchDragDistance < TAP_THRESHOLD_PX && e.changedTouches.length > 0) {
         handleTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
@@ -1890,6 +2502,7 @@
   });
 
   canvas.addEventListener('touchcancel', () => {
+    cancelLongPress();
     touchMode = null;
   });
 
@@ -1979,6 +2592,18 @@
         ctx.lineTo(cx + 12, cy - 8);
         ctx.stroke();
       }, text: 'track segment' },
+    { draw: (cx, cy) => {
+        ctx.lineWidth = 3;
+        const steps = 12;
+        for (let i = 0; i < steps; i++) {
+          const t0 = i / steps, t1 = (i + 1) / steps;
+          ctx.strokeStyle = gradeColor(t0 * GRADE_COLOR_MAX_PERCENT);
+          ctx.beginPath();
+          ctx.moveTo(cx - 12 + t0 * 24, cy);
+          ctx.lineTo(cx - 12 + t1 * 24, cy);
+          ctx.stroke();
+        }
+      }, text: '"Grade Color" mode — white (flat) → yellow → red (' + GRADE_COLOR_MAX_PERCENT + '%+ grade)' },
     { draw: (cx, cy) => drawCarIcon(cx, cy, Math.PI / 2, true, false, cssVar('--special-white'), 20),
       text: 'engine / tender' },
     { draw: (cx, cy) => drawCarIcon(cx, cy, Math.PI / 2, false, false, cssVar('--special-white'), 14),
@@ -2003,6 +2628,10 @@
     { draw: (cx, cy) => drawServicePointIcon(cx, cy, 'Diesel'), text: 'diesel supply point' },
     { draw: (cx, cy) => drawPassengerStopIcon(cx - 12, cy, cx + 12, cy),
       text: 'passenger station platform (one per platform track)' },
+    { draw: (cx, cy) => drawWaypointArrowIcon(cx, cy + 13, WAYPOINT_BASE_COLOR, null),
+      text: 'Auto Engineer waypoint — base game (Engine Info panel, selected engine only)' },
+    { draw: (cx, cy) => drawWaypointArrowIcon(cx, cy + 13, WAYPOINT_QUEUE_COLOR, 2),
+      text: 'Waypoint Queue mod waypoint — numbered by queue order, if that mod is installed' },
     { draw: (cx, cy) => drawHotboxGlyph(cx, cy, STATUS_BADGE_RADIUS),
       text: 'hotbox — badge, label & message stay until resolved/dismissed' },
     { draw: (cx, cy) => drawHandbrakeGlyph(cx, cy, STATUS_BADGE_RADIUS),
@@ -2012,7 +2641,8 @@
     { draw: (cx, cy) => drawSpottedGlyph(cx, cy, STATUS_BADGE_RADIUS),
       text: 'car spotted at destination (badge/label/message fade after a few seconds)' },
     { note: 'car name label recolors to match the active alert; engines\' always-shown label does the same' },
-    { note: 'tap a car, switch, or signal for details' },
+    { note: 'tap a car, switch, signal, or waypoint arrow for details; tap bare track for its grade' },
+    { note: 'right-click (or long-press) anywhere on the map to warp the in-game camera there' },
   ];
 
   function buildLegend() {
@@ -2076,6 +2706,20 @@
     pinEnginesBtn.classList.toggle('active', pinEnginesEnabled);
     if (!pinEnginesEnabled) clearPinnedPopups();
     draw();
+  });
+
+  enginePaneBtn.addEventListener('click', () => {
+    enginePaneOpen = !enginePaneOpen;
+    enginePane.classList.toggle('hidden', !enginePaneOpen);
+    enginePaneBtn.classList.toggle('active', enginePaneOpen);
+    if (enginePaneOpen) refreshEnginePane();
+    requestRedraw(); // waypoint arrows only render while the panel's open
+  });
+
+  engineSelect.addEventListener('change', () => {
+    selectedEngineId = engineSelect.value;
+    refreshEnginePane();
+    requestRedraw(); // waypoint arrows are scoped to the selected engine
   });
 
   window.addEventListener('resize', resizeCanvas);

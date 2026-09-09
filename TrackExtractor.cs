@@ -89,8 +89,24 @@ namespace RailroaderMinimapServer
                         TrackSegment.End.A,
                         PositionAccuracy.Standard,
                         out Vector3 worldPos,
-                        out Quaternion _);
-                    segDto.points.Add(new float[] { worldPos.x, MapCoordinates.MapZ(worldPos.z) });
+                        out Quaternion rot);
+
+                    // Grade %, matching Graph.GradeAtLocation's own formula
+                    // exactly -- confirmed by decompiling: for a non-turntable
+                    // segment, Graph.GetPositionRotation(location) (which
+                    // GradeAtLocation calls) is just this exact same
+                    // GetPositionRotationAtDistance call, so the rotation is
+                    // identical and there's no need for a second Graph call
+                    // per point. eulerAngles.x is the track's pitch in
+                    // degrees; *1.746 is the game's own small-angle
+                    // tan(degrees) approximation to a percentage (grades are
+                    // always only a few degrees at most in practice, where
+                    // this approximation holds well).
+                    float pitchDeg = rot.eulerAngles.x;
+                    if (pitchDeg > 180f) pitchDeg -= 360f;
+                    float gradePercent = pitchDeg * 1.746f;
+
+                    segDto.points.Add(new float[] { worldPos.x, MapCoordinates.MapZ(worldPos.z), gradePercent });
                 }
 
                 network.segments.Add(segDto);

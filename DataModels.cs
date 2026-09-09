@@ -36,7 +36,12 @@ namespace RailroaderMinimapServer.Data
         // so this is never the raw "0 = use class default" sentinel value).
         public int speedLimit { get; set; }
 
-        // Each entry is [x, z] in world coordinates
+        // Each entry is [x, z, gradePercent] in world coordinates -- gradePercent
+        // is the track's grade (%) at that specific point (matching
+        // Graph.GradeAtLocation's own formula), used for the client's
+        // optional grade-color overlay. Positive/negative sign reflects the
+        // pitch direction sampled from TrackSegment.End.A; the client only
+        // ever uses the magnitude, so this isn't normalized further here.
         public List<float[]> points { get; set; } = new List<float[]>();
     }
 
@@ -244,6 +249,93 @@ namespace RailroaderMinimapServer.Data
         // used (the hotbox message feed's "which region" text). Null
         // otherwise.
         public string nearestAreaName { get; set; }
+
+        // Car.Weight (empty + current load), in pounds. Sent for every car
+        // (cheap property read) since it feeds the engine panel's gross
+        // train weight even for non-locomotive cars, not just the
+        // locomotive itself.
+        public float weight { get; set; }
+
+        // Car.Condition, 0-1 (repair state). Sent for every car.
+        public float condition { get; set; }
+
+        // "Steam" or "Diesel" -- null for non-locomotives.
+        public string locomotiveType { get; set; }
+
+        // BaseLocomotive.RatedTractiveEffort (lbs) -- this engine's own
+        // rated/starting tractive effort, distinct from the live,
+        // throttle-dependent Car.TractiveEffort. Null for non-locomotives.
+        public float? ratedTractiveEffort { get; set; }
+
+        // The following three are about the WHOLE coupled train this
+        // locomotive is part of (via Car.EnumerateCoupled(), which walks
+        // the full physically-connected consist regardless of which end
+        // this car sits at), not just this one car. Null for
+        // non-locomotives, since the engine panel is the only current
+        // consumer and only ever looks these up for a selected engine.
+        // trainCarCount excludes locomotives and tenders (revenue/passenger
+        // cars only, matching how a railroader would say "a 40-car train").
+        public int? trainCarCount { get; set; }
+
+        // Total weight (tons) of every car in the coupled train, including
+        // locomotives and tenders.
+        public float? trainGrossWeightTons { get; set; }
+
+        // Sum of RatedTractiveEffort across every locomotive in the coupled
+        // train (this one included).
+        public float? trainCombinedTractiveEffort { get; set; }
+
+        // This locomotive's own single Auto Engineer waypoint order (Model.AI
+        // Orders.Waypoint, when Mode == AutoEngineerMode.Waypoint) -- the
+        // base game's native, one-at-a-time waypoint system. Null for
+        // non-locomotives, and for a locomotive not currently in Waypoint
+        // mode.
+        public WaypointDto autoEngineerWaypoint { get; set; }
+
+        // The full queued waypoint list from the third-party "Waypoint
+        // Queue" mod, in queue order -- always an empty list (never null)
+        // for a locomotive, whether that's because nothing is queued or
+        // because the mod isn't installed at all (see WaypointQueueBridge,
+        // which returns an empty list either way). Null only for
+        // non-locomotives.
+        public List<WaypointDto> queuedWaypoints { get; set; }
+    }
+
+    // A single Auto Engineer destination -- either the base game's own
+    // single waypoint order, or one entry from the Waypoint Queue mod's
+    // per-locomotive queue. Rendered client-side as a larger arrow icon
+    // distinct from the fixed map markers (switches/signals/etc.) above.
+    public class WaypointDto
+    {
+        // Short label identifying the waypoint (Waypoint Queue's own
+        // ManagedWaypoint.Name, e.g. "Waypoint 1"; a fixed "Waypoint" for
+        // the base game's single order, which has no name of its own).
+        public string label { get; set; }
+
+        // What this waypoint is currently doing, in the mod's own words
+        // (ManagedWaypoint.StatusLabel, e.g. "Running to waypoint",
+        // "Refueling Coal") -- LIVE execution state, not configuration, so
+        // it reads "Inactive" for every queued waypoint that isn't the one
+        // currently being run (see `actions` below for what it's actually
+        // configured to do). For the base game's single order this is just
+        // the Orders.Mode name ("Waypoint"), since the base game has no
+        // richer status text to surface.
+        public string statusLabel { get; set; }
+
+        // Human-readable configured instructions for this waypoint (e.g.
+        // "Couple to nearest car", "Refuel Coal", "Wait 5 minutes"),
+        // translated server-side from Waypoint Queue's raw settings (see
+        // WaypointQueueBridge.BuildActionSummary) -- unlike statusLabel,
+        // this reflects what the waypoint will DO whenever it runs,
+        // regardless of whether it's the active one right now. Null for the
+        // base game's single order, which has no configurable instructions
+        // of its own (it's just "go here"); never null/empty for a
+        // Waypoint Queue entry (falls back to "Move to this waypoint").
+        public List<string> actions { get; set; }
+
+        // [x, z] in world coordinates, same convention as every other
+        // position field in this file.
+        public float[] position { get; set; }
     }
 
     public class LiveStatePayloadDto
@@ -251,5 +343,12 @@ namespace RailroaderMinimapServer.Data
         public string type { get; set; } = MessageType.LiveState;
         public float timestamp { get; set; }
         public List<CarDataDto> rollingStock { get; set; } = new List<CarDataDto>();
+
+        // True once the third-party "Waypoint Queue" mod has been detected
+        // server-side (see WaypointQueueBridge) -- lets the client show a
+        // one-time "enhanced waypoint tracking available" notice instead of
+        // silently having no way to distinguish "mod not installed" from
+        // "nothing queued right now" for any given engine.
+        public bool waypointQueueAvailable { get; set; }
     }
 }

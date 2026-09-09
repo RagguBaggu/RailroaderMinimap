@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +17,7 @@ using HarmonyLib;
 using UnityEngine;
 using Newtonsoft.Json;
 using Model; // Railroader's vehicle namespace (Car, Locomotive)
+using Model.AI; // AutoEngineerPersistence, Orders, AutoEngineerMode
 using Model.Definition; // CarArchetype
 using Model.Ops; // OpsController, Area, OpsCarPosition, Waybill
 using Model.Ops.Definition; // Load
@@ -34,7 +37,7 @@ namespace RailroaderMinimapServer
     {
         public const string PluginGuid = "com.community.railroader.minimap";
         public const string PluginName = "Railroader Minimap Server";
-        public const string PluginVersion = "0.8.0";
+        public const string PluginVersion = "0.9.0";
 
         private const int HttpPort = 8080;
         private const int WsPort = 8081;
@@ -96,11 +99,9 @@ namespace RailroaderMinimapServer
         // same instance the whole CTC system uses internally.
         private SignalStorage _signalStorage;
 
-        // Console.OnUserInput fires for every line typed into the in-game
-        // console, for any listener to interpret -- not a structured
-        // registered-command system. Tracked so we only subscribe once,
-        // resolved lazily since the Console UI may not exist yet the moment
-        // this plugin's Awake() runs.
+        // Tracks whether TryHookConsole has already made its one attempt to
+        // register the /minimap command, resolved lazily since the Console
+        // UI may not exist yet the moment this plugin's Awake() runs.
         private bool _consoleHooked = false;
         private IDisposable _systemModeObserver;
         private readonly Dictionary<string, IDisposable> _signalObservers = new Dictionary<string, IDisposable>();
@@ -184,6 +185,10 @@ namespace RailroaderMinimapServer
                 else if (command.StartsWith("SET_SWITCH:"))
                 {
                     HandleSetSwitchCommand(command.Substring("SET_SWITCH:".Length));
+                }
+                else if (command.StartsWith("WARP_CAMERA:"))
+                {
+                    HandleWarpCameraCommand(command.Substring("WARP_CAMERA:".Length));
                 }
             }
 
@@ -341,7 +346,7 @@ namespace RailroaderMinimapServer
             var controller = TrainController.Shared;
             if (controller == null) return null;
 
-            var payload = new LiveStatePayloadDto { timestamp = Time.time };
+            var payload = new LiveStatePayloadDto { timestamp = Time.time, waypointQueueAvailable = WaypointQueueBridge.IsAvailable() };
             Graph graph = Graph.Shared;
 
             foreach (var car in controller.Cars)
@@ -358,7 +363,18 @@ namespace RailroaderMinimapServer
                 try
                 {
                     isLoco = car.IsLocomotive;
-                    carType = car.CarType;
+                    // Car.CarType is just a short category code (e.g. "LS"
+                    // for any steam locomotive, "LD" for any diesel one) --
+                    // NOT a descriptive class/model name, despite the
+                    // property name suggesting otherwise. The real display
+                    // name the game's own UI uses (confirmed by decompiling
+                    // TagNameForCar, e.g. "P-48 Pacific" or "U30C") is
+                    // Car.DefinitionInfo.Metadata.Name, with CarType only as
+                    // its fallback when that's empty -- same resolution
+                    // order used here.
+                    carType = !string.IsNullOrEmpty(car.DefinitionInfo.Metadata.Name)
+                        ? car.DefinitionInfo.Metadata.Name
+                        : car.CarType;
                     // The base game excludes passenger cars from destination
                     // coloring entirely (see IsFreight check in the
                     // TraincarColorUpdater coroutine) -- Coach/Baggage are
@@ -411,6 +427,31 @@ namespace RailroaderMinimapServer
                 // every car, every broadcast tick, when almost none are ever
                 // hotboxed at a given moment.
                 string nearestAreaName = hasHotbox ? GetNearestAreaName(car) : null;
+
+                float weight = 0f;
+                float condition = 0f;
+                try
+                {
+                    weight = car.Weight;
+                    condition = car.Condition;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"Could not read weight/condition for '{carId}': {ex.Message}");
+                }
+
+                // Only resolved for locomotives -- EnumerateCoupled walks the
+                // whole train, not worth paying for on every freight/passenger
+                // car when the engine panel is the only current consumer.
+                (string locomotiveType, float? ratedTractiveEffort, int? trainCarCount, float? trainGrossWeightTons, float? trainCombinedTractiveEffort) =
+                    isLoco ? GetLocomotiveTrainInfo(car) : (null, null, null, null, null);
+
+                // Also locomotive-only -- resolving Auto Engineer waypoint
+                // locations means a Graph lookup (or several, for a
+                // WaypointQueue queue), same cost rationale as
+                // GetLocomotiveTrainInfo above.
+                (WaypointDto autoEngineerWaypoint, List<WaypointDto> queuedWaypoints) =
+                    isLoco ? GetLocomotiveWaypoints(car, graph, carId) : (null, null);
 
                 // PRIMARY: the car's true geometric center, recomputed fresh
                 // from track topology on every call (never a cached/stale
@@ -480,7 +521,16 @@ namespace RailroaderMinimapServer
                         atDestination = atDestination,
                         hasHotbox = hasHotbox,
                         handbrakeApplied = handbrakeApplied,
-                        nearestAreaName = nearestAreaName
+                        nearestAreaName = nearestAreaName,
+                        weight = weight,
+                        condition = condition,
+                        locomotiveType = locomotiveType,
+                        ratedTractiveEffort = ratedTractiveEffort,
+                        trainCarCount = trainCarCount,
+                        trainGrossWeightTons = trainGrossWeightTons,
+                        trainCombinedTractiveEffort = trainCombinedTractiveEffort,
+                        autoEngineerWaypoint = autoEngineerWaypoint,
+                        queuedWaypoints = queuedWaypoints
                     };
                     _lastKnownState[carId] = dto;
                 }
@@ -509,7 +559,16 @@ namespace RailroaderMinimapServer
                         atDestination = atDestination,
                         hasHotbox = hasHotbox,
                         handbrakeApplied = handbrakeApplied,
-                        nearestAreaName = nearestAreaName
+                        nearestAreaName = nearestAreaName,
+                        weight = weight,
+                        condition = condition,
+                        locomotiveType = locomotiveType,
+                        ratedTractiveEffort = ratedTractiveEffort,
+                        trainCarCount = trainCarCount,
+                        trainGrossWeightTons = trainGrossWeightTons,
+                        trainCombinedTractiveEffort = trainCombinedTractiveEffort,
+                        autoEngineerWaypoint = autoEngineerWaypoint,
+                        queuedWaypoints = queuedWaypoints
                     };
                     _lastKnownState[carId] = dto;
                 }
@@ -642,6 +701,128 @@ namespace RailroaderMinimapServer
             }
         }
 
+        // Locomotive-only info for the engine panel: type, rated tractive
+        // effort, and whole-train aggregates (combined TE, car count, gross
+        // weight). Returns all-null fields for a non-locomotive car.
+        //
+        // Car.EnumerateCoupled() walks the FULL physically-connected consist
+        // regardless of which end this car sits at or how it's oriented
+        // within it (confirmed by decompiling IntegrationSet.EnumerateCoupledTo:
+        // it finds the true start of the connected chain first, then walks to
+        // the end) -- a single default-direction call already returns the
+        // entire train, no need to also walk the opposite LogicalEnd.
+        private static (string locomotiveType, float? ratedTractiveEffort, int? trainCarCount, float? trainGrossWeightTons, float? trainCombinedTractiveEffort) GetLocomotiveTrainInfo(Car car)
+        {
+            if (!(car is BaseLocomotive loco)) return (null, null, null, null, null);
+
+            string type = car.Archetype == CarArchetype.LocomotiveSteam ? "Steam"
+                : car.Archetype == CarArchetype.LocomotiveDiesel ? "Diesel"
+                : null;
+
+            float ratedTE = loco.RatedTractiveEffort;
+
+            int carCount = 0;
+            float grossWeightLbs = 0f;
+            float combinedTE = 0f;
+            try
+            {
+                foreach (var member in car.EnumerateCoupled())
+                {
+                    if (member == null) continue;
+
+                    grossWeightLbs += member.Weight;
+
+                    if (member.IsLocomotive)
+                    {
+                        if (member is BaseLocomotive memberLoco)
+                        {
+                            combinedTE += memberLoco.RatedTractiveEffort;
+                        }
+                    }
+                    else if (member.Archetype != CarArchetype.Tender)
+                    {
+                        carCount++;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Could not enumerate coupled train for '{GetStableCarId(car)}': {ex.Message}");
+            }
+
+            // Car.Weight is in pounds (confirmed: the game's own GravityForce
+            // computation divides by 2000 to get tons) -- 2000 lbs/ton.
+            return (type, ratedTE, carCount, grossWeightLbs / 2000f, combinedTE);
+        }
+
+        // Resolves this locomotive's Auto Engineer destinations to map
+        // positions: the base game's own single Orders.Waypoint (native to
+        // every locomotive, no mod required) plus, if the third-party
+        // Waypoint Queue mod is installed, its full per-locomotive queue
+        // (see WaypointQueueBridge). Both use the same Graph.GetPositionRotation(
+        // Location).Position resolution TrackExtractor uses for track
+        // sampling -- world space, not WorldTransformer.WorldToGame -- since
+        // Location is a track-graph concept, not a live transform position.
+        private static (WaypointDto autoEngineerWaypoint, List<WaypointDto> queuedWaypoints) GetLocomotiveWaypoints(Car car, Graph graph, string carId)
+        {
+            WaypointDto autoEngineerWaypoint = null;
+            try
+            {
+                if (graph != null)
+                {
+                    Orders orders = new AutoEngineerPersistence(car.KeyValueObject).Orders;
+                    if (orders.Mode == AutoEngineerMode.Waypoint && orders.Waypoint.HasValue)
+                    {
+                        Location location = graph.ResolveLocationString(orders.Waypoint.Value.LocationString);
+                        Vector3 pos = graph.GetPositionRotation(location).Position;
+                        autoEngineerWaypoint = new WaypointDto
+                        {
+                            label = "Waypoint",
+                            statusLabel = "Waypoint",
+                            position = new float[] { pos.x, MapCoordinates.MapZ(pos.z) }
+                        };
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Could not read Auto Engineer waypoint for '{carId}': {ex.Message}");
+            }
+
+            var queuedWaypoints = new List<WaypointDto>();
+            try
+            {
+                if (graph != null)
+                {
+                    // WaypointQueue's LocoWaypointState.LocomotiveId is
+                    // resolved via TrainController.Shared.TryGetCarForId,
+                    // which looks up its internal _carLookup dictionary --
+                    // confirmed (via decompiling) keyed by car.id, NOT the
+                    // Ident-formatted carId (e.g. "UP 4014") used everywhere
+                    // else in this file for our own DTOs/logging. Passing
+                    // carId here instead of car.id would make every lookup
+                    // silently miss.
+                    foreach (var (name, statusLabel, actions, location) in WaypointQueueBridge.GetQueuedWaypoints(car.id))
+                    {
+                        Vector3 pos = graph.GetPositionRotation(location).Position;
+                        queuedWaypoints.Add(new WaypointDto
+                        {
+                            label = name,
+                            statusLabel = statusLabel,
+                            actions = actions,
+                            position = new float[] { pos.x, MapCoordinates.MapZ(pos.z) }
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Could not resolve WaypointQueue positions for '{carId}': {ex.Message}");
+            }
+
+            return (autoEngineerWaypoint, queuedWaypoints);
+        }
+
         internal static string GetStableCarId(Car car)
         {
             // CarIdent is a non-nullable struct; ToString() formats the road name & number.
@@ -729,6 +910,88 @@ namespace RailroaderMinimapServer
                 }
             }
             _switchHandlers.Clear();
+        }
+
+        #endregion
+
+        #region Camera Warp
+
+        // Teleports whichever in-game camera is currently active (free/
+        // "Strategy" camera, or the first-person character) to a map
+        // location the player picked via right-click/long-press on the
+        // companion app. `CameraSelector.JumpToPoint(gamePoint, rotation,
+        // cameraIdentifier: null)` (confirmed by decompiling) does exactly
+        // this dispatch itself -- passing null for the identifier makes it
+        // use whatever mode is currently active (falling back to Strategy
+        // if the player happens to be in Dispatcher mode), so this project
+        // doesn't need its own logic to detect which camera is active.
+        //
+        // payload is "gameX,gameZ" (invariant-culture floats) -- the same
+        // game-space X/Z convention every other position in this file uses,
+        // EXCEPT the client's Z is negated for map display (see
+        // MapCoordinates.MapZ), so it must be un-negated here before use.
+        private void HandleWarpCameraCommand(string payload)
+        {
+            string[] parts = payload?.Split(',');
+            if (parts == null || parts.Length != 2
+                || !float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float gameX)
+                || !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float clientZ))
+            {
+                Log.Warning($"WARP_CAMERA request ignored -- malformed payload '{payload}'.");
+                return;
+            }
+            float gameZ = -clientZ;
+
+            CameraSelector selector = CameraSelector.shared;
+            if (selector == null)
+            {
+                Log.Warning("WARP_CAMERA request ignored -- CameraSelector not available.");
+                return;
+            }
+
+            try
+            {
+                // Physics.Raycast operates in true Unity world space, but
+                // the X/Z we have are in the game's floating-origin "game
+                // space" -- WorldTransformer.GameToWorld/WorldToGame is a
+                // simple, Y-independent offset (confirmed by decompiling:
+                // literally `worldPosition +/- _currentOffset`), so a
+                // placeholder Y here doesn't affect the resulting world X/Z.
+                Vector3 worldGuess = WorldTransformer.GameToWorld(new Vector3(gameX, 0f, gameZ));
+
+                // Straight-down raycast against Terrain+Track to find actual
+                // ground height at that X/Z, the same pattern the game's own
+                // code uses for ground-snapping (e.g. track-carving tools).
+                // Matters for the first-person character: PlayerController.
+                // JumpTo is a direct KinematicCharacterMotor.
+                // SetPositionAndRotation teleport with no ground-snap of its
+                // own (confirmed by decompiling) -- an inaccurate Y here
+                // would spawn the player floating or clipped into the
+                // ground. The free/Strategy camera doesn't actually need
+                // this (StrategyCameraController.JumpTo re-snaps to ground
+                // itself), so this is harmless -- just unnecessary -- there.
+                float groundY = 0f;
+                Vector3 rayOrigin = new Vector3(worldGuess.x, 2000f, worldGuess.z);
+                if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, 4000f, (1 << Layers.Terrain) | (1 << Layers.Track)))
+                {
+                    groundY = hit.point.y;
+                }
+                else
+                {
+                    Log.Warning($"WARP_CAMERA: no ground found under game ({gameX:F1}, {gameZ:F1}) -- warping at world Y=0.");
+                }
+
+                // Small clearance above the raycast-hit surface so the
+                // first-person character doesn't spawn clipped into it.
+                Vector3 targetWorld = new Vector3(worldGuess.x, groundY + 1.0f, worldGuess.z);
+                Vector3 targetGame = WorldTransformer.WorldToGame(targetWorld);
+
+                selector.JumpToPoint(targetGame, Quaternion.identity);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"WARP_CAMERA request failed: {ex.Message}");
+            }
         }
 
         #endregion
@@ -860,44 +1123,120 @@ namespace RailroaderMinimapServer
             }
         }
 
-        // UI.Console.Console -- fully qualified throughout, since its bare
+        // UI.Console.* -- fully qualified throughout, since Console's bare
         // name collides with System.Console (this file has `using System;`).
+        //
+        // This used to just listen to Console.OnUserInput, a raw firehose
+        // of every line typed (not a structured command system), and react
+        // to "minimap"/"/minimap" text directly. That had two real bugs:
+        // typing the command WITHOUT a leading "/" also got sent as an
+        // in-game chat message (the game's own OnUserInput handler treats
+        // any non-"/"-prefixed line as chat via StateManager.ApplyLocal(new
+        // Say(...))), and typing it WITH a leading "/" still printed the
+        // game's own "Command not recognized." first, since the game's
+        // handler runs its full command lookup regardless of what other
+        // listeners on the same event choose to do with that text -- there's
+        // no way to "consume" the event to stop it. Properly registering a
+        // real UI.Console.IConsoleCommand fixes both: it only ever matches
+        // an actual "/minimap" (never bare text, never as chat), and the
+        // game's own dispatcher finds it directly instead of falling
+        // through to "not recognized" first.
         private void TryHookConsole()
         {
             UI.Console.Console console = UI.Console.Console.shared;
             if (console == null) return; // Console UI may not exist yet; retried every tick until it does
 
-            console.OnUserInput += OnConsoleUserInput;
-            _consoleHooked = true;
+            _consoleHooked = true; // one attempt regardless of outcome -- console exists now, stop retrying either way
+
+            if (!TryRegisterConsoleCommand(console))
+            {
+                Log.Warning("Could not register the /minimap console command (game update likely changed UI.Console.ConsoleCommandHandler's internals) -- connection URLs are still logged on startup, just not available via the in-game console.");
+            }
         }
 
-        private void OnConsoleUserInput(string line)
+        // ConsoleCommandHandler auto-discovers [ConsoleCommand]-attributed
+        // commands via Assembly.GetExecutingAssembly().GetTypes() (confirmed
+        // by decompiling) -- which only ever means the GAME's own assembly,
+        // never this mod's, so that attribute alone can't get our command
+        // registered no matter what. Instead, this reaches its private
+        // `_commands` field (a plain Dictionary<string, IConsoleCommand>)
+        // via reflection and inserts directly -- the exact same dictionary
+        // its own commands populate themselves into via Register<T>, just
+        // reached from outside. Once we have that live reference, no further
+        // reflection is needed; it's an ordinary dictionary from there.
+        private bool TryRegisterConsoleCommand(UI.Console.Console console)
         {
-            // Not a registered-command system -- OnUserInput fires for
-            // every line typed into the console, for any listener
-            // (including the game's own handlers) to interpret. This only
-            // reacts to its own specific text and leaves everything else
-            // alone, so it can't interfere with any other command.
-            string trimmed = (line ?? string.Empty).Trim();
-            // Accept an optional leading "/" -- HandleUserInput passes the
-            // raw typed text with no visible prefix-stripping in the code
-            // we've seen, but that doesn't rule out some upstream UI
-            // convention we haven't looked at. Stripping it ourselves means
-            // both "minimap" and "/minimap" work regardless.
-            if (trimmed.StartsWith("/")) trimmed = trimmed.Substring(1);
-
-            if (!trimmed.Equals("minimap", StringComparison.OrdinalIgnoreCase)
-                && !trimmed.Equals("minimap_url", StringComparison.OrdinalIgnoreCase))
+            try
             {
-                return;
+                var handler = console.GetComponent<UI.Console.ConsoleCommandHandler>();
+                if (handler == null) return false;
+
+                var commandsField = typeof(UI.Console.ConsoleCommandHandler)
+                    .GetField("_commands", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (!(commandsField?.GetValue(handler) is Dictionary<string, UI.Console.IConsoleCommand> commands))
+                {
+                    return false;
+                }
+
+                var command = new MinimapConsoleCommand(this);
+                // "/minimap_url" kept as an alias for anyone used to the old
+                // bare-word version's second name.
+                commands["/minimap"] = command;
+                commands["/minimap_url"] = command;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Failed to register /minimap console command via reflection: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void TryUnregisterConsoleCommand()
+        {
+            try
+            {
+                UI.Console.Console console = UI.Console.Console.shared;
+                var handler = console?.GetComponent<UI.Console.ConsoleCommandHandler>();
+                if (handler == null) return;
+
+                var commandsField = typeof(UI.Console.ConsoleCommandHandler)
+                    .GetField("_commands", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (commandsField?.GetValue(handler) is Dictionary<string, UI.Console.IConsoleCommand> commands)
+                {
+                    commands.Remove("/minimap");
+                    commands.Remove("/minimap_url");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Failed to unregister /minimap console command: {ex.Message}");
+            }
+        }
+
+        // A properly-registered slash command rather than the raw text
+        // listener this used to be -- see TryHookConsole above for why.
+        // Nested privately since it only exists to bridge into
+        // ConsoleCommandHandler's dictionary and has no reason to be
+        // constructed from anywhere else. [ConsoleCommand] is still applied
+        // here (even though attribute-based auto-discovery can't see it,
+        // being in the wrong assembly) because UI.Console.Console's own
+        // /help command reads a command's name/description straight off
+        // this same attribute via reflection -- without it, /help would
+        // throw a NullReferenceException the moment it reached this entry.
+        [UI.Console.ConsoleCommand("/minimap", "Show the Minimap Server's connection URLs.")]
+        private class MinimapConsoleCommand : UI.Console.IConsoleCommand
+        {
+            private readonly MinimapServerCore _core;
+
+            public MinimapConsoleCommand(MinimapServerCore core)
+            {
+                _core = core;
             }
 
-            UI.Console.Console console = UI.Console.Console.shared;
-            if (console == null) return;
-
-            foreach (string outLine in BuildConnectionAddressLines())
+            public string Execute(string[] components)
             {
-                console.AddLine(outLine);
+                return string.Join("\n", _core.BuildConnectionAddressLines());
             }
         }
 
@@ -943,6 +1282,17 @@ namespace RailroaderMinimapServer
                 {
                     ctx.Response.ContentType = "text/html; charset=utf-8";
                     ctx.Response.ContentEncoding = Encoding.UTF8;
+                    // No cache headers were set here at all previously --
+                    // the browser was free to serve a stale cached copy of
+                    // this page indefinitely on ordinary reload/reconnect
+                    // (only a hard refresh would bypass it), which is
+                    // exactly the kind of thing that makes "I fixed this
+                    // already" bug reports genuinely confusing to debug.
+                    // This mod's own DLL always serves whatever HTML is
+                    // currently embedded in it, so there's never a reason
+                    // for a client to keep an old copy around.
+                    ctx.Response.Headers.Add("Cache-Control", "no-store, no-cache, must-revalidate");
+                    ctx.Response.Headers.Add("Pragma", "no-cache");
                     ctx.Response.ContentLength64 = _companionAppHtml.Length;
                     ctx.Response.OutputStream.Write(_companionAppHtml, 0, _companionAppHtml.Length);
                     ctx.Response.OutputStream.Close();
@@ -1051,11 +1401,7 @@ namespace RailroaderMinimapServer
 
             if (_consoleHooked)
             {
-                UI.Console.Console console = UI.Console.Console.shared;
-                if (console != null)
-                {
-                    console.OnUserInput -= OnConsoleUserInput;
-                }
+                TryUnregisterConsoleCommand();
                 _consoleHooked = false;
             }
 
