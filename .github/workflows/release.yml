@@ -17,6 +17,13 @@ jobs:
     # "Setting up the release runner" section for one-time setup.
     runs-on: [self-hosted, Windows]
 
+    # Explicit, rather than relying on the repo's default GITHUB_TOKEN
+    # permissions -- without this, "Create GitHub Release" fails with
+    # "Resource not accessible by integration" if the repo's default
+    # workflow permissions are read-only (which they are unless changed).
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
