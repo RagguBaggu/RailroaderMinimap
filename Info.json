@@ -1,9 +1,18 @@
 {
-  "Id": "RailroaderMinimapServer",
-  "DisplayName": "Railroader Minimap Server",
-  "Author": "RagguBaggu",
-  "Version": "0.9.0",
-  "ManagerVersion": "0.32.5.0",
-  "AssemblyName": "RailroaderMinimapServer.dll",
-  "EntryMethod": "RailroaderMinimapServer.UnityModManagerEntry.Load"
+  "identifier": "raggubaggu/minimap-server",
+  "name": "Railroader Minimap Server",
+  "author": "RagguBaggu",
+  "version": "0.10.0",
+  "url": "https://github.com/RagguBaggu/RailroaderMinimap",
+  "description": "Live minimap in a web browser, on this PC or a phone/tablet on the same network. Open http://localhost:8080/ or type /minimap in the console for the URLs.",
+  "license": "MIT",
+  "scope": "client",
+  "dependencies": {
+    "required": [
+      "rr/game"
+    ]
+  },
+  "assemblies": [
+    "RailroaderMinimapServer.dll"
+  ]
 }

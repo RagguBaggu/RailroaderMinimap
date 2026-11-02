@@ -8,8 +8,13 @@
     <Nullable>disable</Nullable>
     <!-- Update this path to your Railroader root folder -->
     <RailroaderDir>C:\Program Files (x86)\Steam\steamapps\common\Railroader</RailroaderDir>
-    <!-- Confirmed: UnityModManager.dll lives here for this install. -->
-    <UnityModManagerDir>$(RailroaderDir)\Railroader_Data\Managed\UnityModManager</UnityModManagerDir>
+    <!-- Where DeployToModsFolder (bottom of this file) copies the built mod
+         after each build, so it's immediately ready to test in-game. The
+         game's built-in mod loader reads Documents\Railroader\Mods, NOT the
+         Mods folder under the game's install directory (that one is UMM's).
+         Override with -p:ModDeployDir=... if the game is launched with
+         -homedir pointing somewhere else. -->
+    <ModDeployDir>$([System.Environment]::GetFolderPath(SpecialFolder.MyDocuments))\Railroader\Mods\RailroaderMinimapServer</ModDeployDir>
   </PropertyGroup>
 
   <!-- The companion app's HTML/CSS/JS is bundled directly into the DLL as
@@ -20,43 +25,32 @@
   </ItemGroup>
 
   <!-- Copy Info.json alongside the built DLL so the output folder is a
-       complete, ready-to-install UMM mod folder. -->
+       complete, ready-to-install mod folder for the game's built-in loader. -->
   <ItemGroup>
     <None Include="Info.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 
-  <!-- WebSocketSharp: Unity/Mono's HttpListener does NOT implement WebSocket
-       support (AcceptWebSocketAsync throws NotImplementedException at
-       runtime, even though it compiles fine against the net48 reference
-       assemblies). WebSocketSharp implements the WebSocket protocol itself
-       over raw sockets, bypassing that Mono limitation entirely.
-
-       NOTE: a UMM GitHub issue (newman55/unity-mod-manager#133) specifically
-       discusses Railroader mods with more than one DLL failing to load
-       depending on UMM's install method (Doorstop proxy vs. assembly
-       injection): if WebSocketSharp.dll doesn't get picked up automatically
-       from this mod's own output folder, try copying it directly into
-       Railroader_Data\Managed\ instead. This install is confirmed on
-       DoorstopProxy, which the same issue thread confirms handles this
-       correctly. -->
-  <ItemGroup>
-    <PackageReference Include="WebSocketSharp" Version="1.0.3-rc11" />
-  </ItemGroup>
-
-  <!-- Game Assemblies -->
+  <!-- Game Assemblies. Every one of these ships with the game itself, so
+       the built mod has no dependencies of its own to bundle. -->
   <ItemGroup>
     <Reference Include="Core">
       <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Core.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Definition">
-      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Definition.dll</HintPath>
+    <!-- Railroader 2026.1 moved nearly all game code (formerly split
+         between Assembly-CSharp.dll and Definition.dll) into this one
+         assembly. Assembly-CSharp.dll is now a near-empty stub and
+         Definition.dll no longer exists. -->
+    <Reference Include="Railroader">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Railroader.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Assembly-CSharp.dll</HintPath>
+    <!-- The game's own mod API (IModEntryPoint, IModContext, ...), used by
+         GameModEntry.cs for the built-in mod loader. -->
+    <Reference Include="Railroader.Modding">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\Railroader.Modding.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine">
@@ -79,25 +73,35 @@
     </Reference>
     <!-- AutoEngineerPersistence.Orders (Model.AI) is backed by a
          KeyValueObject, whose type lives in this separate assembly rather
-         than Assembly-CSharp itself. -->
+         than Railroader.dll itself. -->
     <Reference Include="KeyValue.Runtime">
       <HintPath>$(RailroaderDir)\Railroader_Data\Managed\KeyValue.Runtime.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!-- WebSocketSharp: Unity/Mono's HttpListener does NOT implement
+         WebSocket support (AcceptWebSocketAsync throws
+         NotImplementedException at runtime, even though it compiles fine
+         against the net48 reference assemblies). WebSocketSharp implements
+         the WebSocket protocol itself over raw sockets. The game ships its
+         own copy since 2026.1 (for its built-in HTTP server), so this mod
+         references that one instead of bundling a NuGet copy. -->
+    <Reference Include="WebSocketSharp">
+      <HintPath>$(RailroaderDir)\Railroader_Data\Managed\WebSocketSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
-  <!-- Unity Mod Manager + Harmony: confirmed paths for this install
-       (Railroader_Data\Managed\UnityModManager\, containing both
-       UnityModManager.dll and 0Harmony.dll). -->
-  <ItemGroup>
-    <Reference Include="UnityModManager">
-      <HintPath>$(UnityModManagerDir)\UnityModManager.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="0Harmony">
-      <HintPath>$(UnityModManagerDir)\0Harmony.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-  </ItemGroup>
+  <!-- Copies the two files README's Installation section lists as
+       required (the DLL and Info.json) straight into the game's Mods folder
+       after every build, so a fresh build is immediately ready to test
+       in-game with no manual copy step. DestinationFolder creates
+       ModDeployDir itself if it doesn't exist yet. -->
+  <Target Name="DeployToModsFolder" AfterTargets="Build">
+    <ItemGroup>
+      <ModDeployFiles Include="$(OutDir)RailroaderMinimapServer.dll" />
+      <ModDeployFiles Include="$(OutDir)Info.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ModDeployFiles)" DestinationFolder="$(ModDeployDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

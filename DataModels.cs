@@ -12,6 +12,7 @@ namespace RailroaderMinimapServer.Data
         public const string LiveState = "live_state";
         public const string SwitchState = "switch_state";
         public const string SignalAspectUpdate = "signal_aspect";
+        public const string TrackCondition = "track_condition";
     }
 
     public class TrackNetworkDto
@@ -32,8 +33,11 @@ namespace RailroaderMinimapServer.Data
         public string nodeB { get; set; }
         public float length { get; set; }
 
-        // Effective speed limit in MPH (already resolved via TrackSegment.GetExpectedSpeedLimit(),
-        // so this is never the raw "0 = use class default" sentinel value).
+        // Effective speed limit in MPH (already resolved via
+        // TrackSegment.EffectiveSpeedLimitMph, so this is never the raw "0 =
+        // use the railroad's default" sentinel value). This is the signed
+        // limit only -- a Maintenance of Way speed restriction from worn
+        // track comes separately, via TrackConditionUpdateDto.
         public int speedLimit { get; set; }
 
         // Each entry is [x, z, gradePercent] in world coordinates -- gradePercent
@@ -70,6 +74,35 @@ namespace RailroaderMinimapServer.Data
         public string type { get; set; } = MessageType.SwitchState;
         public string id { get; set; }
         public bool isThrown { get; set; }
+    }
+
+    // Maintenance of Way (Railroader 2026.1+) condition per track segment,
+    // keyed by the same segment id as SegmentDto.id. Kept out of
+    // TrackNetworkDto because, unlike geometry, it changes continuously
+    // (wear accumulates with traffic, crews repair and build) -- so it's
+    // polled every few seconds and only segments whose values changed are
+    // re-sent. A full snapshot (full = true) always follows a track_network
+    // message and replaces whatever the client had.
+    //
+    // Each value is a compact int array, since there are thousands of
+    // segments and most of the payload would otherwise be repeated keys:
+    //   [0] condition %   -- relative to the grading class's target, the
+    //                        same number the game's own track tooltip shows
+    //                        ("Class 3 track, 87% condition"); 0-100
+    //   [1] grading class -- 1-5, what the track was built/maintained to
+    //                        (or is being built to, while under construction)
+    //   [2] posted class  -- 1-5, the class actually in effect (sets the
+    //                        speed restriction: 10/25/40/60/80 mph)
+    //   [3] construction state -- Track.TrackConstructionState flags; 0 means
+    //                        built. Nonzero: 1 rails, 2 ties, 4 ballast,
+    //                        8 blasting, 16 abutments, 32 bridge wood,
+    //                        64 bridge steel, 128 portals still needed
+    //   [4] construction progress % -- 0-100, only meaningful when [3] != 0
+    public class TrackConditionUpdateDto
+    {
+        public string type { get; set; } = MessageType.TrackCondition;
+        public bool full { get; set; }
+        public Dictionary<string, int[]> segments { get; set; } = new Dictionary<string, int[]>();
     }
 
     // A physical CTC signal -- a genuinely separate object from a switch,

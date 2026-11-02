@@ -9,16 +9,14 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using GalaSoft.MvvmLight.Messaging;
-using Game.Events; // GraphDidRebuildCollections
+using Game.Events; // EventBus, GraphDidRebuildCollections
 using Game.Messages; // RequestSetSwitch
+using Game.Mow; // TrackConditionController (Maintenance of Way)
 using Game.State; // StateManager
-using HarmonyLib;
 using UnityEngine;
 using Newtonsoft.Json;
-using Model; // Railroader's vehicle namespace (Car, Locomotive)
+using Model; // Railroader's vehicle namespace (Car, Locomotive, CarType)
 using Model.AI; // AutoEngineerPersistence, Orders, AutoEngineerMode
-using Model.Definition; // CarArchetype
 using Model.Ops; // OpsController, Area, OpsCarPosition, Waybill
 using Model.Ops.Definition; // Load
 using Track; // TrackNode, Graph, Location
@@ -31,13 +29,17 @@ using WebSocketSharp.Server;
 namespace RailroaderMinimapServer
 {
     // Core logic, kept separate from the loader-specific entry point
-    // (UnityModManagerEntry.cs handles logging setup and instantiation) so
-    // the two concerns don't tangle together.
+    // (GameModEntry.cs handles logging setup and instantiation) so the two
+    // concerns don't tangle together.
     public class MinimapServerCore : MonoBehaviour
     {
-        public const string PluginGuid = "com.community.railroader.minimap";
         public const string PluginName = "Railroader Minimap Server";
-        public const string PluginVersion = "0.9.0";
+        public const string PluginVersion = "0.10.0";
+
+        // The single live instance, for the console command class (which the
+        // game constructs itself via Activator.CreateInstance, so it can't be
+        // handed a reference any other way).
+        internal static MinimapServerCore Instance { get; private set; }
 
         private const int HttpPort = 8080;
         private const int WsPort = 8081;
@@ -61,8 +63,6 @@ namespace RailroaderMinimapServer
         private WebSocketServer _wsServer;
         private CancellationTokenSource _httpCts;
 
-        private Harmony _harmony;
-
         private readonly ConcurrentQueue<string> _inboundQueue = new ConcurrentQueue<string>();
 
         private string _cachedTrackJson = null;
@@ -85,9 +85,9 @@ namespace RailroaderMinimapServer
         private const float CarDebugLogInterval = 5.0f;
 
         // Last known live position per car, keyed by a stable car id. Used
-        // only as a final fallback if a car has neither a captured
-        // UpdateMapIconPosition sample yet nor a valid track Location (e.g.
-        // in the first instant after it's created).
+        // only as a final fallback if a car has neither a valid track
+        // Location nor a loaded body (e.g. in the first instant after it's
+        // created).
         private readonly Dictionary<string, CarDataDto> _lastKnownState = new Dictionary<string, CarDataDto>();
 
         // Handlers registered against TrackNode.OnDidChangeThrown, kept so we
@@ -99,16 +99,20 @@ namespace RailroaderMinimapServer
         // same instance the whole CTC system uses internally.
         private SignalStorage _signalStorage;
 
-        // Tracks whether TryHookConsole has already made its one attempt to
-        // register the /minimap command, resolved lazily since the Console
-        // UI may not exist yet the moment this plugin's Awake() runs.
-        private bool _consoleHooked = false;
+        // The console whose command handler /minimap is currently registered
+        // with (see TryHookConsole). Resolved lazily, since the Console UI may
+        // not exist yet the moment this mod loads, and re-checked every tick
+        // in case the game recreates it (a fresh ConsoleCommandHandler starts
+        // with only the game's own commands).
+        private UI.Console.Console _hookedConsole;
+        private bool _consoleHookFailed = false;
         private IDisposable _systemModeObserver;
         private readonly Dictionary<string, IDisposable> _signalObservers = new Dictionary<string, IDisposable>();
 
         private void Awake()
         {
-            Log.Info($"{PluginName} initializing...");
+            Instance = this;
+            Log.Info($"{PluginName} {PluginVersion} initializing...");
 
             // DontDestroyOnLoad only takes effect on a root-level GameObject.
             if (transform.parent != null)
@@ -128,18 +132,34 @@ namespace RailroaderMinimapServer
             // existing track reorganized (water/coaling tower additions,
             // etc.). Subscribing means the cache invalidates and refreshes
             // itself automatically instead of silently going stale for the
-            // rest of the session.
-            Messenger.Default.Register<GraphDidRebuildCollections>(this, OnGraphRebuilt);
-
-            // Patches Car.UpdateMapIconPosition to capture the same live
-            // position/rotation the game's own minimap uses -- confirmed (by
-            // examining the Map Enhancer mod) to be called for every car
-            // regardless of whether its visual model is currently loaded,
-            // which is far more reliable than reading BodyTransform directly.
-            _harmony = new Harmony(PluginGuid);
-            _harmony.PatchAll(System.Reflection.Assembly.GetExecutingAssembly());
+            // rest of the session. (Railroader 2026.1 replaced MVVM Light's
+            // Messenger.Default with its own Game.Events.EventBus.)
+            EventBus.Subscribe<GraphDidRebuildCollections>(this, OnGraphRebuilt);
 
             StartServer();
+        }
+
+        // Called by GameModEntry via the game's IWorldLifecycle hooks. Every
+        // reference into the previous world's objects (switch nodes, the
+        // SignalStorage, the MoW controller, cached geometry) is dropped
+        // here, since loading a different save would otherwise leave them
+        // pointing at destroyed objects from the old one.
+        internal void OnWorldUnloaded()
+        {
+            UnsubscribeFromSwitchEvents();
+            UnsubscribeFromSignalEvents();
+            _systemModeObserver?.Dispose();
+            _systemModeObserver = null;
+            _signalStorage = null;
+            _cachedTrackJson = null;
+            _lastKnownState.Clear();
+            ResetTrackConditionState();
+        }
+
+        internal void OnWorldLoaded()
+        {
+            _cachedTrackJson = null;
+            _trackCacheNeedsRebroadcast = true;
         }
 
         private void Update()
@@ -161,7 +181,7 @@ namespace RailroaderMinimapServer
 
         private void UpdateInternal()
         {
-            if (!_consoleHooked) TryHookConsole();
+            if (!_consoleHookFailed) TryHookConsole();
 
             // 1. Process client requests on the main thread
             while (_inboundQueue.TryDequeue(out string command))
@@ -180,6 +200,10 @@ namespace RailroaderMinimapServer
                     if (!string.IsNullOrEmpty(_cachedTrackJson))
                     {
                         Broadcast(_cachedTrackJson);
+                        // Track condition is keyed by segment id, so it's
+                        // only meaningful after the client has the matching
+                        // network -- always follow it with a full snapshot.
+                        BroadcastTrackCondition(fullSnapshot: true);
                     }
                 }
                 else if (command.StartsWith("SET_SWITCH:"))
@@ -209,6 +233,7 @@ namespace RailroaderMinimapServer
                     if (!string.IsNullOrEmpty(_cachedTrackJson))
                     {
                         Broadcast(_cachedTrackJson);
+                        BroadcastTrackCondition(fullSnapshot: true);
                     }
                 }
             }
@@ -238,6 +263,20 @@ namespace RailroaderMinimapServer
                 if (!string.IsNullOrEmpty(payload))
                 {
                     Broadcast(payload);
+                }
+            }
+
+            // 3. Maintenance of Way track condition -- changes slowly (wear
+            // accumulates with traffic; maintenance/construction happen over
+            // in-game hours), so a much coarser poll than car telemetry,
+            // sending only segments whose condition actually changed.
+            _trackConditionTimer += Time.deltaTime;
+            if (_trackConditionTimer >= TrackConditionPollInterval)
+            {
+                _trackConditionTimer = 0f;
+                if (_cachedTrackJson != null)
+                {
+                    BroadcastTrackCondition(fullSnapshot: false);
                 }
             }
         }
@@ -309,7 +348,7 @@ namespace RailroaderMinimapServer
                 return;
             }
 
-            int total = 0, viaGraph = 0, viaMapIconFallback = 0, lastKnownFallback = 0, skipped = 0;
+            int total = 0, viaGraph = 0, viaBodyFallback = 0, lastKnownFallback = 0, skipped = 0;
 
             foreach (var car in controller.Cars)
             {
@@ -320,9 +359,9 @@ namespace RailroaderMinimapServer
                 {
                     viaGraph++;
                 }
-                else if (Car_UpdateMapIconPosition_Patch.LatestPositions.ContainsKey(GetStableCarId(car)))
+                else if (car.BodyTransform != null)
                 {
-                    viaMapIconFallback++;
+                    viaBodyFallback++;
                 }
                 else if (_lastKnownState.ContainsKey(GetStableCarId(car)))
                 {
@@ -336,9 +375,8 @@ namespace RailroaderMinimapServer
 
             Log.Info(
                 $"[CarDiag] hasClients={hasClients}, GraphShared={(graph != null)}, " +
-                $"totalCars={total}, viaGraph={viaGraph}, viaMapIconFallback={viaMapIconFallback}, " +
-                $"lastKnownFallback={lastKnownFallback}, skippedEntirely={skipped}, " +
-                $"harmonyDictSize={Car_UpdateMapIconPosition_Patch.LatestPositions.Count}");
+                $"totalCars={total}, viaGraph={viaGraph}, viaBodyFallback={viaBodyFallback}, " +
+                $"lastKnownFallback={lastKnownFallback}, skippedEntirely={skipped}");
         }
 
         private string GatherLiveStateJson()
@@ -374,13 +412,15 @@ namespace RailroaderMinimapServer
                     // order used here.
                     carType = !string.IsNullOrEmpty(car.DefinitionInfo.Metadata.Name)
                         ? car.DefinitionInfo.Metadata.Name
-                        : car.CarType;
+                        : car.CarType.ToString();
                     // The base game excludes passenger cars from destination
                     // coloring entirely (see IsFreight check in the
                     // TraincarColorUpdater coroutine) -- Coach/Baggage are
-                    // the passenger-carrying archetypes.
-                    isPassenger = car.Archetype == CarArchetype.Coach || car.Archetype == CarArchetype.Baggage;
-                    isTender = car.Archetype == CarArchetype.Tender;
+                    // the passenger-carrying types. Railroader 2026.1 removed
+                    // the CarArchetype enum; Car.CarType is now a struct with
+                    // prefix-based helpers (IsCoach = "PB", IsTender = "LT").
+                    isPassenger = car.CarType.IsCoach || car.CarType.IsBaggage;
+                    isTender = car.CarType.IsTender;
                 }
                 catch (Exception ex)
                 {
@@ -401,11 +441,11 @@ namespace RailroaderMinimapServer
                     try
                     {
                         Car tender = car.CoupledTo(Car.LogicalEnd.A);
-                        if (tender == null || tender.Archetype != CarArchetype.Tender)
+                        if (tender == null || !tender.CarType.IsTender)
                         {
                             tender = car.CoupledTo(Car.LogicalEnd.B);
                         }
-                        if (tender != null && tender.Archetype == CarArchetype.Tender)
+                        if (tender != null && tender.CarType.IsTender)
                         {
                             tenderLoads = ReadCarLoads(tender, GetStableCarId(tender));
                         }
@@ -490,17 +530,12 @@ namespace RailroaderMinimapServer
 
                 if (centerPos.HasValue && centerRot.HasValue)
                 {
-                    // The Harmony-captured MapIcon position below is only
-                    // refreshed when the game calls Car.UpdateMapIconPosition,
-                    // which happens as part of active movement -- a stationary
-                    // car has no reason for that to fire, so if the world's
-                    // coordinate origin rebases underneath it (confirmed this
-                    // game has such a system, via CarMover.WorldDidMove/
-                    // "MoveWorld" logs -- camera teleports and waking a car up
-                    // from being unloaded are exactly the kind of event that
-                    // can trigger this), the cached value goes stale until the
-                    // car moves again. Location-based position has no such
-                    // staleness window since it's never cached.
+                    // Preferred over the body-transform fallback below: that
+                    // only exists while the car's visual model is loaded, and
+                    // is in true Unity world space, which the game rebases
+                    // underneath it (floating origin -- CarMover.WorldDidMove/
+                    // "MoveWorld" logs). Location-based position is never
+                    // cached and works for unloaded cars too.
                     Vector3 pos = centerPos.Value;
                     dto = new CarDataDto
                     {
@@ -534,19 +569,25 @@ namespace RailroaderMinimapServer
                     };
                     _lastKnownState[carId] = dto;
                 }
-                else if (Car_UpdateMapIconPosition_Patch.LatestPositions.TryGetValue(carId, out var capturedPosRot))
+                else if (car.BodyTransform != null)
                 {
                     // Fallback for the rare case a car doesn't have a valid
-                    // track Location yet (e.g. very early in setup) but has
-                    // already reported a MapIcon position. Still needs the
-                    // game-space conversion -- see WorldTransformer note above.
-                    Vector3 gamePos = WorldTransformer.WorldToGame(capturedPosRot.position);
+                    // track Location yet (e.g. very early in setup) but its
+                    // body is already placed. This used to come from a Harmony
+                    // postfix on Car.UpdateMapIconPosition, but that method is
+                    // handed exactly the position the body is moved to, and
+                    // dropping Harmony means the mod needs nothing beyond what
+                    // the game itself ships (Harmony only exists in a game
+                    // install when another mod loader put it there). Still
+                    // needs the game-space conversion -- world space here.
+                    Transform body = car.BodyTransform;
+                    Vector3 gamePos = WorldTransformer.WorldToGame(body.position);
                     dto = new CarDataDto
                     {
                         id = carId,
                         x = gamePos.x,
                         z = MapCoordinates.MapZ(gamePos.z),
-                        rotationY = capturedPosRot.rotation.eulerAngles.y,
+                        rotationY = body.rotation.eulerAngles.y,
                         loaded = car.BodyTransform != null,
                         isLocomotive = isLoco,
                         carType = carType,
@@ -611,7 +652,9 @@ namespace RailroaderMinimapServer
                         CarLoadInfo? loadInfo = car.GetLoadInfo(slot);
                         if (!loadInfo.HasValue || string.IsNullOrEmpty(loadInfo.Value.LoadId)) continue;
 
-                        Load load = CarPrototypeLibrary.instance?.LoadForId(loadInfo.Value.LoadId);
+                        // CarLoadLibrary replaced CarPrototypeLibrary.LoadForId
+                        // in Railroader 2026.1 (returns null for an unknown id).
+                        Load load = CarLoadLibrary.GetLoad(loadInfo.Value.LoadId);
                         if (load == null) continue;
 
                         loads.Add(load.QuantityString(loadInfo.Value.Quantity));
@@ -715,8 +758,8 @@ namespace RailroaderMinimapServer
         {
             if (!(car is BaseLocomotive loco)) return (null, null, null, null, null);
 
-            string type = car.Archetype == CarArchetype.LocomotiveSteam ? "Steam"
-                : car.Archetype == CarArchetype.LocomotiveDiesel ? "Diesel"
+            string type = car.CarType.IsLocomotiveSteam ? "Steam"
+                : car.CarType.IsLocomotiveDiesel ? "Diesel"
                 : null;
 
             float ratedTE = loco.RatedTractiveEffort;
@@ -739,7 +782,7 @@ namespace RailroaderMinimapServer
                             combinedTE += memberLoco.RatedTractiveEffort;
                         }
                     }
-                    else if (member.Archetype != CarArchetype.Tender)
+                    else if (!member.CarType.IsTender)
                     {
                         carCount++;
                     }
@@ -893,7 +936,7 @@ namespace RailroaderMinimapServer
 
             var update = new SwitchStateUpdateDto
             {
-                id = !string.IsNullOrEmpty(node.id) ? node.id : node.name,
+                id = node.id,
                 isThrown = node.isThrown
             };
 
@@ -1069,10 +1112,114 @@ namespace RailroaderMinimapServer
 
         #endregion
 
+        #region Maintenance of Way (track condition)
+
+        // Railroader 2026.1's Maintenance of Way: every track segment wears
+        // with traffic, and worn track is posted down to a lower class (a
+        // speed restriction) until a work crew maintains it. New track is
+        // also built segment by segment now, so a segment can exist in the
+        // Graph long before it's usable. All of this is read through
+        // Game.Mow.TrackConditionController's public per-segment getters.
+
+        private float _trackConditionTimer = 0f;
+        private const float TrackConditionPollInterval = 5.0f;
+
+        // Last values sent per segment id, so a poll only broadcasts segments
+        // that actually changed. Cleared whenever a full snapshot is sent.
+        private readonly Dictionary<string, int[]> _sentTrackCondition = new Dictionary<string, int[]>();
+        private bool _trackConditionErrorLogged = false;
+
+        private void ResetTrackConditionState()
+        {
+            _sentTrackCondition.Clear();
+            _trackConditionTimer = 0f;
+        }
+
+        private void BroadcastTrackCondition(bool fullSnapshot)
+        {
+            // Nobody to send to: skip the work entirely. A newly connecting
+            // client always asks for GET_TRACK_DATA, which sends a full
+            // snapshot, so no deltas need to accumulate in the meantime.
+            if (!HasConnectedClients()) return;
+
+            Graph graph = Graph.Shared;
+            if (graph == null || !graph.HasPopulatedCollections) return;
+
+            // Direct == null comparison (Unity destroyed-object semantics),
+            // not ?. -- see the CTCPanelController note in GetSignalStorage.
+            TrackConditionController controller = TrackConditionController.Shared;
+            if (controller == null) return;
+
+            if (fullSnapshot) _sentTrackCondition.Clear();
+            var update = new TrackConditionUpdateDto { full = fullSnapshot };
+
+            foreach (var segment in graph.Segments)
+            {
+                // Turntable bridges aren't right-of-way: MoW never wears or
+                // builds them, and the controller reports them as pristine.
+                if (segment == null || segment.a == null || segment.b == null || !segment.IsRightOfWay) continue;
+
+                int[] values;
+                try
+                {
+                    values = ReadTrackCondition(controller, segment);
+                }
+                catch (Exception ex)
+                {
+                    // Once, not once per segment per poll -- if one throws,
+                    // likely all do (e.g. the controller isn't set up yet).
+                    if (!_trackConditionErrorLogged)
+                    {
+                        _trackConditionErrorLogged = true;
+                        Log.Warning($"Could not read track condition (further errors suppressed): {ex.Message}");
+                    }
+                    continue;
+                }
+
+                string id = TrackExtractor.SegmentIdentifier(segment);
+                if (!fullSnapshot && _sentTrackCondition.TryGetValue(id, out int[] previous) && previous.SequenceEqual(values)) continue;
+
+                _sentTrackCondition[id] = values;
+                update.segments[id] = values;
+            }
+
+            if (!fullSnapshot && update.segments.Count == 0) return;
+            Broadcast(JsonConvert.SerializeObject(update));
+        }
+
+        // See TrackConditionUpdateDto for the array layout.
+        private static int[] ReadTrackCondition(TrackConditionController controller, TrackSegment segment)
+        {
+            float condition = controller.GetCondition(segment);           // 0-1
+            int gradingClass = Mathf.Clamp(controller.GetGradingClass(segment), 1, 5);
+            int postedClass = Mathf.Clamp(segment.PostedTrackClass, 1, 5);
+            TrackConstructionState state = segment.ConstructionState;
+            int progressPercent = state == TrackConstructionState.Complete
+                ? 100
+                : Mathf.Clamp(Mathf.RoundToInt(controller.GetConstructionProgressByPhase(segment) * 100f), 0, 100);
+
+            return new[] { ConditionPercent(gradingClass, condition), gradingClass, postedClass, (int)state, progressPercent };
+        }
+
+        // Matches the game's own tooltip text exactly (decompiled from
+        // TrackConditionModel.GetConditionDescription, which is internal):
+        // condition as a fraction of the grading class's target condition
+        // (class N targets N * 20%), floored, with a small tolerance so track
+        // maintained exactly to its class reads 100% rather than 99%.
+        private static int ConditionPercent(int gradingClass, float condition)
+        {
+            float target = gradingClass * 0.2f;
+            if (target - condition <= 0.001f) return 100;
+            return (int)Mathf.Floor(Mathf.Min(condition / target, 1f) * 100f);
+        }
+
+        #endregion
+
         private void OnDestroy()
         {
             Log.Info($"{PluginName} shutting down (OnDestroy)...");
             StopServer();
+            if (Instance == this) Instance = null;
         }
 
         #region HTTP + WebSocket Server
@@ -1126,63 +1273,77 @@ namespace RailroaderMinimapServer
         // UI.Console.* -- fully qualified throughout, since Console's bare
         // name collides with System.Console (this file has `using System;`).
         //
-        // This used to just listen to Console.OnUserInput, a raw firehose
-        // of every line typed (not a structured command system), and react
-        // to "minimap"/"/minimap" text directly. That had two real bugs:
-        // typing the command WITHOUT a leading "/" also got sent as an
-        // in-game chat message (the game's own OnUserInput handler treats
-        // any non-"/"-prefixed line as chat via StateManager.ApplyLocal(new
-        // Say(...))), and typing it WITH a leading "/" still printed the
-        // game's own "Command not recognized." first, since the game's
-        // handler runs its full command lookup regardless of what other
-        // listeners on the same event choose to do with that text -- there's
-        // no way to "consume" the event to stop it. Properly registering a
-        // real UI.Console.IConsoleCommand fixes both: it only ever matches
-        // an actual "/minimap" (never bare text, never as chat), and the
-        // game's own dispatcher finds it directly instead of falling
-        // through to "not recognized" first.
+        // Railroader 2026.1 replaced the old IConsoleCommand/_commands
+        // dictionary with an attribute-based system: a class marked
+        // [ConsoleCommandHandler("/name", "description")], whose methods are
+        // marked [ConsoleDefaultCommand] (bare "/name") or
+        // [ConsoleSubcommand] ("/name sub ..."). ConsoleCommandHandler.Awake
+        // only scans the game's own assembly (Assembly.GetExecutingAssembly()),
+        // but the scanning itself is the public
+        // CommandProcessor.RegisterHandlers(Assembly) -- so this reaches the
+        // handler's private `_processor` field via reflection and hands it
+        // this mod's assembly. Everything from there (dispatch, prefix
+        // matching, /help listing, usage text) is the game's own code.
+        //
+        // Registering properly (rather than listening to Console.OnUserInput)
+        // matters: a raw listener can't stop the game from also treating the
+        // line as chat (no leading "/") or printing "Command not recognized."
+        // (with one).
         private void TryHookConsole()
         {
             UI.Console.Console console = UI.Console.Console.shared;
             if (console == null) return; // Console UI may not exist yet; retried every tick until it does
+            if (console == _hookedConsole) return; // already registered with this one
 
-            _consoleHooked = true; // one attempt regardless of outcome -- console exists now, stop retrying either way
-
-            if (!TryRegisterConsoleCommand(console))
+            if (TryRegisterConsoleCommand(console))
             {
+                _hookedConsole = console;
+            }
+            else
+            {
+                // One failure is enough to know the game's internals changed;
+                // don't retry (and re-log) every tick for the whole session.
+                _consoleHookFailed = true;
                 Log.Warning("Could not register the /minimap console command (game update likely changed UI.Console.ConsoleCommandHandler's internals) -- connection URLs are still logged on startup, just not available via the in-game console.");
             }
         }
 
-        // ConsoleCommandHandler auto-discovers [ConsoleCommand]-attributed
-        // commands via Assembly.GetExecutingAssembly().GetTypes() (confirmed
-        // by decompiling) -- which only ever means the GAME's own assembly,
-        // never this mod's, so that attribute alone can't get our command
-        // registered no matter what. Instead, this reaches its private
-        // `_commands` field (a plain Dictionary<string, IConsoleCommand>)
-        // via reflection and inserts directly -- the exact same dictionary
-        // its own commands populate themselves into via Register<T>, just
-        // reached from outside. Once we have that live reference, no further
-        // reflection is needed; it's an ordinary dictionary from there.
+        private static UI.Console.CommandProcessor GetCommandProcessor(UI.Console.Console console)
+        {
+            var handler = console.GetComponent<UI.Console.ConsoleCommandHandler>();
+            if (handler == null) return null;
+
+            var processorField = typeof(UI.Console.ConsoleCommandHandler)
+                .GetField("_processor", BindingFlags.NonPublic | BindingFlags.Instance);
+            return processorField?.GetValue(handler) as UI.Console.CommandProcessor;
+        }
+
+        // CommandProcessor keeps registered commands in a private
+        // `_handlers` Dictionary<string, CommandHandlerInfo>, keyed by the
+        // command name without its "/". CommandHandlerInfo is an internal
+        // struct, so it's only reachable as a non-generic IDictionary -- which
+        // is all that's needed to check for or remove one key.
+        private static System.Collections.IDictionary GetRegisteredHandlers(UI.Console.CommandProcessor processor)
+        {
+            var handlersField = typeof(UI.Console.CommandProcessor)
+                .GetField("_handlers", BindingFlags.NonPublic | BindingFlags.Instance);
+            return handlersField?.GetValue(processor) as System.Collections.IDictionary;
+        }
+
         private bool TryRegisterConsoleCommand(UI.Console.Console console)
         {
             try
             {
-                var handler = console.GetComponent<UI.Console.ConsoleCommandHandler>();
-                if (handler == null) return false;
+                var processor = GetCommandProcessor(console);
+                if (processor == null) return false;
 
-                var commandsField = typeof(UI.Console.ConsoleCommandHandler)
-                    .GetField("_commands", BindingFlags.NonPublic | BindingFlags.Instance);
-                if (!(commandsField?.GetValue(handler) is Dictionary<string, UI.Console.IConsoleCommand> commands))
-                {
-                    return false;
-                }
+                // RegisterHandlers logs an error for a command that's already
+                // registered -- e.g. after the mod is unloaded and reloaded
+                // without the console itself being recreated.
+                var handlers = GetRegisteredHandlers(processor);
+                if (handlers != null && handlers.Contains(MinimapConsoleCommand.Name)) return true;
 
-                var command = new MinimapConsoleCommand(this);
-                // "/minimap_url" kept as an alias for anyone used to the old
-                // bare-word version's second name.
-                commands["/minimap"] = command;
-                commands["/minimap_url"] = command;
+                processor.RegisterHandlers(typeof(MinimapConsoleCommand).Assembly);
                 return true;
             }
             catch (Exception ex)
@@ -1196,17 +1357,13 @@ namespace RailroaderMinimapServer
         {
             try
             {
-                UI.Console.Console console = UI.Console.Console.shared;
-                var handler = console?.GetComponent<UI.Console.ConsoleCommandHandler>();
-                if (handler == null) return;
+                UI.Console.Console console = _hookedConsole;
+                _hookedConsole = null;
+                if (console == null) return;
 
-                var commandsField = typeof(UI.Console.ConsoleCommandHandler)
-                    .GetField("_commands", BindingFlags.NonPublic | BindingFlags.Instance);
-                if (commandsField?.GetValue(handler) is Dictionary<string, UI.Console.IConsoleCommand> commands)
-                {
-                    commands.Remove("/minimap");
-                    commands.Remove("/minimap_url");
-                }
+                var processor = GetCommandProcessor(console);
+                if (processor == null) return;
+                GetRegisteredHandlers(processor)?.Remove(MinimapConsoleCommand.Name);
             }
             catch (Exception ex)
             {
@@ -1214,29 +1371,21 @@ namespace RailroaderMinimapServer
             }
         }
 
-        // A properly-registered slash command rather than the raw text
-        // listener this used to be -- see TryHookConsole above for why.
-        // Nested privately since it only exists to bridge into
-        // ConsoleCommandHandler's dictionary and has no reason to be
-        // constructed from anywhere else. [ConsoleCommand] is still applied
-        // here (even though attribute-based auto-discovery can't see it,
-        // being in the wrong assembly) because UI.Console.Console's own
-        // /help command reads a command's name/description straight off
-        // this same attribute via reflection -- without it, /help would
-        // throw a NullReferenceException the moment it reached this entry.
-        [UI.Console.ConsoleCommand("/minimap", "Show the Minimap Server's connection URLs.")]
-        private class MinimapConsoleCommand : UI.Console.IConsoleCommand
+        // The game constructs this itself (Activator.CreateInstance) for
+        // every invocation, so it reaches the server through the static
+        // Instance rather than a constructor argument. The game's dispatcher
+        // only looks for non-public methods, hence `private`.
+        [UI.Console.ConsoleCommandHandler("/" + Name, "Show the Minimap Server's connection URLs.")]
+        private class MinimapConsoleCommand
         {
-            private readonly MinimapServerCore _core;
+            public const string Name = "minimap";
 
-            public MinimapConsoleCommand(MinimapServerCore core)
+            [UI.Console.ConsoleDefaultCommand]
+            private string Show()
             {
-                _core = core;
-            }
-
-            public string Execute(string[] components)
-            {
-                return string.Join("\n", _core.BuildConnectionAddressLines());
+                MinimapServerCore core = Instance;
+                if (core == null) return "The Minimap Server isn't running.";
+                return string.Join("\n", core.BuildConnectionAddressLines());
             }
         }
 
@@ -1311,7 +1460,9 @@ namespace RailroaderMinimapServer
             // device), not just this PC. Anyone on the same network can
             // connect; acceptable for a home network, but worth knowing.
             _wsServer = new WebSocketServer(IPAddress.Any, WsPort);
-            _wsServer.AddWebSocketService<MinimapSocketBehavior>(ServicePath, () => new MinimapSocketBehavior(_inboundQueue));
+            // The game's WebSocketSharp build takes an initializer for a
+            // behavior it constructs itself (new()), rather than a factory.
+            _wsServer.AddWebSocketService<MinimapSocketBehavior>(ServicePath, behavior => behavior.InboundQueue = _inboundQueue);
             _wsServer.Start();
         }
 
@@ -1397,24 +1548,8 @@ namespace RailroaderMinimapServer
             UnsubscribeFromSignalEvents();
             _systemModeObserver?.Dispose();
             _systemModeObserver = null;
-            Messenger.Default.Unregister<GraphDidRebuildCollections>(this);
-
-            if (_consoleHooked)
-            {
-                TryUnregisterConsoleCommand();
-                _consoleHooked = false;
-            }
-
-            try
-            {
-                // UnpatchAll(string) -- the older, more fundamental Harmony
-                // API, compatible with the Harmony version UMM bundles.
-                _harmony?.UnpatchAll(PluginGuid);
-            }
-            catch (Exception ex)
-            {
-                Log.Warning($"Error unpatching Harmony: {ex.Message}");
-            }
+            EventBus.Unsubscribe(this);
+            TryUnregisterConsoleCommand();
 
             try
             {
@@ -1444,48 +1579,17 @@ namespace RailroaderMinimapServer
         #endregion
     }
 
-    // Captures the same live position/rotation the game's own minimap uses
-    // for each car, by patching Car.UpdateMapIconPosition -- discovered by
-    // examining how the Map Enhancer mod reliably tracks cars (it uses
-    // TrainController.Shared.Cars + this same hook, rather than scanning the
-    // scene directly). This fires for every car regardless of whether its
-    // visual model is currently loaded, which a raw FindObjectsOfType<Car>()
-    // scan and BodyTransform read could not reliably provide.
-    //
-    // This is a Postfix -- purely observational, runs after the original
-    // method, and never alters its behavior or the game's own minimap.
-    [HarmonyPatch(typeof(Car), "UpdateMapIconPosition")]
-    internal static class Car_UpdateMapIconPosition_Patch
-    {
-        public static readonly ConcurrentDictionary<string, (Vector3 position, Quaternion rotation)> LatestPositions
-            = new ConcurrentDictionary<string, (Vector3, Quaternion)>();
-
-        private static void Postfix(Car __instance, Vector3 position, Quaternion rotation)
-        {
-            if (__instance == null) return;
-            string carId = MinimapServerCore.GetStableCarId(__instance);
-            if (string.IsNullOrEmpty(carId)) return;
-
-            LatestPositions[carId] = (position, rotation);
-        }
-    }
-
     // Handles per-connection events on WebSocketSharp's own internal thread(s)
     // -- NOT the Unity main thread. Keep this minimal: just forward inbound
     // messages to the plugin's queue so they're processed during Update()
     // like everything else that touches Unity/game state.
     public class MinimapSocketBehavior : WebSocketBehavior
     {
-        private readonly ConcurrentQueue<string> _inboundQueue;
-
-        public MinimapSocketBehavior(ConcurrentQueue<string> inboundQueue)
-        {
-            _inboundQueue = inboundQueue;
-        }
+        internal ConcurrentQueue<string> InboundQueue { get; set; }
 
         protected override void OnMessage(MessageEventArgs e)
         {
-            _inboundQueue.Enqueue(e.Data);
+            InboundQueue?.Enqueue(e.Data);
         }
     }
 }

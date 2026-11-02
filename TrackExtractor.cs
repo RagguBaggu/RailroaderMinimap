@@ -70,7 +70,10 @@ namespace RailroaderMinimapServer
                     nodeA = NodeIdentifier(segment.a),
                     nodeB = NodeIdentifier(segment.b),
                     length = segment.GetLength(),               // GetLength(), not a "Length" property
-                    speedLimit = segment.GetExpectedSpeedLimit() // resolves the "0 = class default" case
+                    // Railroader 2026.1 removed GetExpectedSpeedLimit();
+                    // EffectiveSpeedLimitMph resolves the same "0 = railroad
+                    // default" case (and caps at the railroad's own limit).
+                    speedLimit = segment.EffectiveSpeedLimitMph
                 };
 
                 // Sampled by DISTANCE (not curve parameter t) via TrackSegment's own
@@ -122,14 +125,14 @@ namespace RailroaderMinimapServer
 
                 switchNodes.Add(node);
 
-                // IMPORTANT: TrackSegment.Curve is built from a/b's
-                // transform.localPosition (see TrackSegment.CreateBezier),
-                // so every point in a segment's polyline is in the LOCAL
-                // coordinate space of whatever parent the track hierarchy
-                // sits under -- not true Unity world space. Switch positions
-                // must use the same localPosition (not .position) or they'll
-                // render disconnected from the track they sit on.
-                Vector3 pos = node.transform.localPosition;
+                // IMPORTANT: TrackSegment.Curve is built from a/b's node
+                // positions, in the track graph's own coordinate space -- not
+                // true Unity world space. Switch positions must use that same
+                // space or they'll render disconnected from the track they
+                // sit on. (Before Railroader 2026.1 TrackNode was a
+                // MonoBehaviour and this was transform.localPosition; it's
+                // now a plain class with a Position property.)
+                Vector3 pos = node.Position;
                 network.switches.Add(new SwitchDto
                 {
                     id = NodeIdentifier(node),
@@ -147,7 +150,7 @@ namespace RailroaderMinimapServer
             // plausibly means "not yet unlocked/relevant" for this save
             // (players don't start with signals), not "streamed out for
             // performance" the way an unloaded car model is.
-            foreach (var signal in UnityEngine.Object.FindObjectsOfType<CTCSignal>())
+            foreach (var signal in UnityEngine.Object.FindObjectsByType<CTCSignal>(FindObjectsSortMode.None))
             {
                 if (signal == null) continue;
                 signals.Add(signal);
@@ -180,7 +183,7 @@ namespace RailroaderMinimapServer
             // GameObject.SetActive(false) until unlocked, so the default
             // active-only FindObjectsOfType query already excludes
             // not-yet-unlocked area names with no extra bookkeeping needed.
-            foreach (var label in UnityEngine.Object.FindObjectsOfType<MapLabel>())
+            foreach (var label in UnityEngine.Object.FindObjectsByType<MapLabel>(FindObjectsSortMode.None))
             {
                 if (label == null || string.IsNullOrEmpty(label.text)) continue;
 
@@ -227,7 +230,7 @@ namespace RailroaderMinimapServer
             // confirming it's already placed exactly at the real-world
             // supply point -- unlike IndustryUnloader/PassengerStop above,
             // this one genuinely needs no correction.
-            foreach (var loader in UnityEngine.Object.FindObjectsOfType<CarLoadTargetLoader>())
+            foreach (var loader in UnityEngine.Object.FindObjectsByType<CarLoadTargetLoader>(FindObjectsSortMode.None))
             {
                 if (loader == null) continue;
 
@@ -239,16 +242,15 @@ namespace RailroaderMinimapServer
                 // undelivered for that tick, not just service points.
                 try
                 {
-                    if (loader.load == null) continue;
-
-                    // WaypointQueue matches on load.name.ToLower(), NOT
-                    // load.id -- confirmed the two aren't interchangeable
-                    // here: an earlier version of this code used .id (which
-                    // works fine for IndustryUnloader elsewhere in this
-                    // file) and it silently matched zero loaders. Mirror the
-                    // proven-working mod's exact expression rather than
-                    // assuming equivalence again.
-                    string kind = loader.load.name?.ToLower() switch
+                    // Railroader 2026.1 made loads plain data (no longer a
+                    // ScriptableObject with a .name) identified by namespaced
+                    // ids -- "rr/water", "rr/coal", "rr/diesel-fuel" -- which
+                    // the loader stores directly as loadId. Matched on the
+                    // part after the domain, so another pack's own
+                    // water/coal/diesel load still gets an icon.
+                    string loadId = loader.loadId;
+                    if (string.IsNullOrEmpty(loadId)) continue;
+                    string kind = loadId.Substring(loadId.IndexOf('/') + 1).ToLowerInvariant() switch
                     {
                         "water" => "Water",
                         "coal" => "Coal",
@@ -284,9 +286,11 @@ namespace RailroaderMinimapServer
             // passenger station buildings generally: it's a literal camera
             // render of the actual platform geometry. We draw our own icon
             // since we don't have that 3D geometry to fall back on.
-            // Active-only, same convention as signals/areas: PassengerStop
-            // implements IProgressionDisablable, so ProgressionDisabled is
-            // checked directly rather than relying on GameObject activation.
+            // Unlocked-only, same convention as signals/areas: PassengerStop
+            // exposes IsProgressionEnabled, checked directly. (Since
+            // Railroader 2026.1 it's a plain class, not a MonoBehaviour, so
+            // it's enumerated via PassengerStop.FindAll() -- i.e.
+            // OpsController.Shared.AllPassengerStops -- not a scene scan.)
             //
             // One entry PER TRACK SPAN, not per station -- a station with
             // multiple platform tracks (PassengerStop.TrackSpans can have
@@ -301,13 +305,16 @@ namespace RailroaderMinimapServer
             // the rectangle to the actual platform instead of us baking in
             // a fixed size or a rotation angle that a Flip X/Z toggle would
             // invert.
-            foreach (var stop in UnityEngine.Object.FindObjectsOfType<PassengerStop>())
+            IEnumerable<PassengerStop> passengerStops = OpsController.Shared != null
+                ? PassengerStop.FindAll()
+                : Enumerable.Empty<PassengerStop>();
+            foreach (var stop in passengerStops)
             {
                 if (stop == null) continue;
 
                 try
                 {
-                    if (stop.ProgressionDisabled) continue;
+                    if (!stop.IsProgressionEnabled) continue;
 
                     bool anySpan = false;
                     foreach (var span in stop.TrackSpans)
@@ -360,14 +367,16 @@ namespace RailroaderMinimapServer
             };
         }
 
-        private static string SegmentIdentifier(TrackSegment segment)
+        // Also used by MinimapServerCore's track-condition messages, which
+        // must key segments exactly the way SegmentDto.id does.
+        internal static string SegmentIdentifier(TrackSegment segment)
         {
-            return !string.IsNullOrEmpty(segment.id) ? segment.id : segment.name;
+            return segment.id;
         }
 
         private static string NodeIdentifier(TrackNode node)
         {
-            return !string.IsNullOrEmpty(node.id) ? node.id : node.name;
+            return node.id;
         }
 
         private static readonly Regex RichTextTagPattern = new Regex("<[^>]+>", RegexOptions.Compiled);

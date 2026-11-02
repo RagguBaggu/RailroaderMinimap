@@ -1,6 +1,6 @@
 # Railroader Minimap Server
 
-A [Unity Mod Manager](https://www.nexusmods.com/site/mods/21) mod for [Railroader](https://store.steampowered.com/app/1683150/Railroader/) that broadcasts live track, switch, signal, area, and rolling-stock data over a local WebSocket, plus a self-hosted companion web app that renders it as an interactive minimap — on the same PC, or on a phone/tablet next to your monitor.
+A mod for [Railroader](https://store.steampowered.com/app/1683150/Railroader/) (2026.1 and newer, using the game's built-in mod loader) that broadcasts live track, switch, signal, area, and rolling-stock data over a local WebSocket, plus a self-hosted companion web app that renders it as an interactive minimap — on the same PC, or on a phone/tablet next to your monitor.
 
 Unlike the game's built-in minimap, this doesn't render the world a second time to draw it, so it doesn't cost you frame rate as you zoom out or as traffic in a yard grows.
 
@@ -18,6 +18,7 @@ Unlike the game's built-in minimap, this doesn't render the world a second time 
 - **Car status indicators** — a hotbox or an applied handbrake shows as a small badge on the car itself (and recolors its name label) for as long as the problem actually lasts; a car being assigned a new destination, or arriving/being spotted at one, flashes briefly instead. A dismissible message feed logs each of these with the car, cargo, and location involved, so you don't have to be looking at the map when it happens
 - **Cargo details** — tap any car to see what it's carrying and how much, using the game's own formatted quantity strings (e.g. "50,000 lbs Coal")
 - **Track grade color-coding** — an optional white→yellow→red overlay on every track segment showing its grade at a glance ("Grade Color" toggle); tap any bare stretch of track to see its exact grade in a popup
+- **Maintenance of Way track condition** — an optional overlay ("Track Condition" toggle) coloring every segment by its condition, using the same percentage as the game's own track tooltip, with track under a wear speed restriction drawn thicker so slow orders stand out. Track that hasn't been built yet is always drawn dashed. Tapping bare track shows its class, condition, and current max speed (and why), or for track under construction, its progress and which materials it still needs
 - **Engine Info panel** — a toggleable per-engine dropdown showing type, model, tractive effort, repair condition, fuel, and hotbox/handbrake status; whole-train aggregates (car count, gross weight, combined tractive effort) when coupled to other cars/engines; and an approximate maximum-tonnage calculation for whatever grade you last tapped on the track
 - **Auto Engineer waypoint visualization** — scoped to the engine currently selected in the Engine Info panel: the base game's own single waypoint order, plus, if the **Waypoint Queue** mod is installed, its complete queue in order, each shown as an oversized arrow icon (numbered by queue position). Tap one for its live status and a plain-language summary of what it's actually configured to do — couple, uncouple, refuel, wait, change speed, and so on — not just its current runtime state
 - **Camera warp** — right-click (or long-press on touch) anywhere on the map for a "Warp camera here" option, teleporting your in-game camera there — whether you're flying the free/Strategy camera or walking around in first person
@@ -26,24 +27,26 @@ Unlike the game's built-in minimap, this doesn't render the world a second time 
 - **No executable required** — the companion app is a plain web page, served directly by the mod itself. Open a URL, nothing to download or run
 - **Same-PC or cross-device** — works in a browser tab on the same machine, or from any phone/tablet on your home network
 - **Touch-friendly** — pinch to zoom, drag to pan, tap for details, on top of scroll-wheel/click support for desktop
-- **`/minimap` in-game console command** — reprints the connection URLs on demand, so you don't need to alt-tab out to the UMM log to find them again mid-session
+- **`/minimap` in-game console command** — reprints the connection URLs on demand, so you don't need to dig through the game's log to find them again mid-session
 
 ## Requirements
 
-- Railroader (Steam)
-- [Unity Mod Manager](https://www.nexusmods.com/site/mods/21), installed and confirmed working with Railroader (i.e. you can already see it launch alongside the game)
+- Railroader **2026.1 or newer** (the Maintenance of Way update — at the time of writing, on the Experimental branch). Nothing else: the game's own built-in mod loader runs this mod, and everything it needs ships with the game.
+- On older Railroader versions, use [release 0.9.0](../../releases/tag/v0.9.0) with Unity Mod Manager instead — the game's internals changed too much in 2026.1 for one build to support both.
 
 ## Installation
 
-1. **Install Unity Mod Manager**, if you don't already have it, and confirm it's working with Railroader before proceeding — install it, launch the game once, and check that UMM's own installer/log shows Railroader as a recognized, working target.
-
-2. **Get the mod files**, either way:
+1. **Get the mod files**, either way:
    - **Download a release** from the [Releases page](../../releases) and extract the zip — it contains a ready-to-use `RailroaderMinimapServer` folder.
-   - **Or build it yourself** (see [Releasing](#releasing) below for the build command) and gather `RailroaderMinimapServer.dll`, `WebSocketSharp.dll` (sits alongside the main DLL in your build output), and `Info.json` into a folder named `RailroaderMinimapServer`.
+   - **Or build it yourself** (see [Releasing](#releasing) below for the build command). A local build copies itself into the folder from step 2 automatically; otherwise gather `RailroaderMinimapServer.dll` and `Info.json` from the build output into a folder named `RailroaderMinimapServer`.
 
-3. **Move that `RailroaderMinimapServer` folder** into UMM's `Mods` folder (find this via the UMM installer's own UI, or wherever your other installed UMM mods for Railroader already live).
+2. **Move that `RailroaderMinimapServer` folder** into `Documents\Railroader\Mods\` (create `Mods` if it doesn't exist yet). Note this is the `Railroader` folder in your **Documents**, not the game's install folder — a `Mods` folder next to `Railroader.exe` is Unity Mod Manager's, which the game itself doesn't read.
 
-4. **Launch Railroader**, open UMM's mod menu in-game, and confirm "Railroader Minimap Server" shows up and is enabled. Check UMM's log (via its own UI's Log tab, or `Railroader_Data\Managed\UnityModManager\Log.txt`) for:
+3. **Allow DLL mods** — this is a code mod, and the game only runs those when you opt in: in-game, open **Preferences**, turn on **Allow Unsafe DLL Mods** (in the **Experimental** section), then restart the game.
+
+4. **Enable the mod** in the game's **Mods** screen (main menu). It's listed as a client-side mod: it only affects your own game, isn't recorded in your saves, and other players in a multiplayer session don't need it.
+
+5. **Load a game**, then type `/minimap` in the in-game console for the connection URLs. They're also written to the game's log (`%USERPROFILE%\AppData\LocalLow\Giraffe Lab LLC\Railroader\Player.log`) at startup:
 
    ```
    Minimap server ready. Open one of these in a browser:
@@ -58,7 +61,7 @@ Unlike the game's built-in minimap, this doesn't render the world a second time 
 
 The page connects automatically — there's nothing to type in, no pairing step. It also auto-reconnects if the connection drops (e.g. the game restarts).
 
-Forgot the address, or need it again without alt-tabbing to the log? Open the in-game console and type `/minimap` (or `/minimap_url`) — it reprints the same URLs shown at startup.
+Forgot the address, or need it again without alt-tabbing to the log? Open the in-game console and type `/minimap` — it reprints the same URLs shown at startup.
 
 **Controls:**
 
@@ -68,9 +71,10 @@ Forgot the address, or need it again without alt-tabbing to the log? Open the in
 | Pan | Click and drag | One-finger drag |
 | View details | Tap/click a car, switch, signal, or waypoint arrow | same |
 | **Throw a switch** | **Tap/click a non-CTC switch** | **same** |
-| View a track's grade | Tap/click bare track | same |
+| View a track's grade and condition | Tap/click bare track | same |
 | **Warp the in-game camera** | **Right-click anywhere on the map, then "Warp camera here"** | **Long-press anywhere on the map, then "Warp camera here"** |
 | Toggle grade color overlay | "Grade Color" button | same |
+| Toggle track condition overlay | "Track Condition" button | same |
 | Open the Engine Info panel | "Engine Info" button, then pick an engine from the dropdown | same |
 | Pin every engine's info | "Pin Engine Info" button | same |
 | Reset view | "Reset View" button | same |
@@ -95,7 +99,8 @@ The companion app has its own built-in legend (bottom-left, collapsible) that re
 - **Small circle with a droplet/lump/diamond glyph** — water/coal/diesel supply point (shape differs per kind, not just color, so they stay distinguishable if you're colorblind)
 - **Tan rectangle** — passenger station platform, sized to the real platform
 - **Small badge on a car** (flame, wheel, checkmark, or arrow) — hotbox, handbrake, spotted, or new-destination-assigned, matching the message feed
-- **White → yellow → red gradient bar** — what "Grade Color" mode uses to paint the track itself, from flat to steep grade
+- **White → yellow → red gradient bar** — what "Grade Color" mode uses to paint the track itself, from flat to steep grade. "Track Condition" mode uses the same ramp for condition, from 100% down to 50% or less, and draws track under a wear speed restriction thicker
+- **Dashed blue line** — track that hasn't been built yet (Maintenance of Way construction)
 - **Large cyan arrow** — the selected engine's base-game Auto Engineer waypoint
 - **Large amber arrow with a number** — one entry in that engine's Waypoint Queue, numbered by its position in the queue
 
@@ -133,7 +138,6 @@ This mod's server has **no authentication**. Anyone on your local network can co
 - **This mod is built on decompiled internals, not a public modding API.** A future Railroader update could rename or restructure any of the game classes this relies on (`Graph`, `TrainController`, `OpsController`, `Track.Signals.*`, etc.) without warning. If the mod stops working after a game update, that's the likely cause — check for an updated release before assuming something else is wrong.
 - **Waypoint Queue integration is a soft, reflection-based dependency on another mod's internals**, which is one layer more fragile than the point above — an update to Waypoint Queue itself (not just the base game) could change its internal class/property names and silently stop this mod's queued-waypoint display from working, without affecting anything else in this mod (the base game's own single waypoint, and every other feature, are unaffected either way).
 - **Camera warp moves only the requesting player's own camera/character**, not shared state broadcast to other players — this hasn't been specifically re-tested in multiplayer, but there's no reason to expect it would behave differently there, since `CameraSelector` is inherently a local, per-client concept in the base game already (each player has their own camera).
-- **UMM's install method matters for this mod specifically**, since it ships two DLLs (the mod itself plus `WebSocketSharp.dll`). This has been tested and confirmed working on the **DoorstopProxy** install method. A [UMM GitHub issue](https://github.com/newman55/unity-mod-manager/issues/133) specifically discusses Railroader mods with more than one DLL not loading correctly under the Assembly injection method — if you're on Assembly injection and the mod doesn't start, try copying `WebSocketSharp.dll` directly into `Railroader_Data\Managed\` instead of the mod's own folder.
 - The companion app's connection URL uses `location.hostname` from the page it's served on — if you're doing something unusual with DNS or a reverse proxy in front of this, you may need to adjust `CompanionApp.html` directly.
 - Custom maps (if added via FUSE in the future) may use a different world-orientation convention than the base game map — the Flip X/Flip Z buttons exist specifically as a manual override if a map ever renders mirrored.
 
@@ -141,38 +145,40 @@ This mod's server has **no authentication**. Anyone on your local network can co
 
 For anyone extending this mod or just curious how it works:
 
+- **Mod loading** uses the game's built-in loader (Railroader 2026.1+): `Info.json` is an asset-pack manifest whose `assemblies` list names this DLL, and the game instantiates its `Railroader.Modding.IModEntryPoint` (`GameModEntry`), which also implements `IWorldLifecycle` to drop references into a world when it unloads. `"scope": "client"` marks it as a per-player mod that isn't recorded in saves or required of multiplayer peers.
 - **Track/switch data** comes from `Graph.Shared` (`Segments`, `Nodes`, `IsSwitch`), not scene scans. Switch push-updates are wired to `TrackNode.OnDidChangeThrown`. The whole cache invalidates and re-broadcasts automatically via `Graph`'s own `GraphDidRebuildCollections` message, and separately via `SignalStorage.ObserveSystemMode` (an ABS/CTC mode switch can change a switch's CTC status without triggering a graph rebuild). Both paths are throttled to at most one rebuild-and-broadcast per second, since a bulk operation can trigger dozens of invalidations in a single frame.
-- **Car positions** come from `TrainController.Shared.Cars`, with a Harmony postfix patch on `Car.UpdateMapIconPosition` capturing the same live position the game's own minimap uses — reliable regardless of whether a car's visual model is currently loaded. A `Graph`/`Location`-based lookup is preferred as the primary source instead (recomputed fresh every call, immune to the staleness a cached position can develop after a floating-origin rebase), with the Harmony-captured value as fallback.
+- **Car positions** come from `TrainController.Shared.Cars`, each resolved to its true geometric center via `Car.GetCenterPosition(Graph)` — `Graph`/`Location`-based, recomputed fresh every call, and works whether or not a car's visual model is currently loaded. For the rare car without a valid track location yet, its body transform (converted from world space) is the fallback. (Earlier versions used a Harmony patch on `Car.UpdateMapIconPosition` for that fallback; it was dropped since Harmony isn't part of the game, only of other mod loaders.)
 - **Switch throwing** sends `StateManager.ApplyLocal(new RequestSetSwitch(nodeId, !isThrown))` — the exact message the game's own switch-marker UI sends for a plain click. CTC-controlled switches are refused server-side, not just hidden client-side.
 - **Destination colors** for freight cars come from `Car.Waybill.Value.Destination` → `OpsController.Shared.AreaForCarPosition(...)` → `Area.tagColor`, with the same en-route/arrived brightness adjustment (HSV boost vs. dimming) found in the base game's own destination-coloring logic.
-- **CTC signals** come from `FindObjectsOfType<CTCSignal>()` (active-only — an inactive signal here means "not unlocked this session," unlike cars where inactive means "streamed out"). Aspect comes from `CTCSignal.CurrentAspect`; live changes push via `SignalStorage.ObserveSignalAspect`, reached through `CTCPanelController.Shared.GetComponentInParent<SignalStorage>()`.
-- **Cargo info** comes from `Car.GetLoadInfo(slot)` for each of `Car.Definition.LoadSlots`, resolved to a `Load` via `CarPrototypeLibrary.instance.LoadForId(...)`, formatted with the game's own `Load.QuantityString(quantity)`.
-- **Area/location names** come from `UI.Map.MapLabel` (just a `text` string on a world-positioned Canvas) — the same component the base game's own minimap (`UI.Map.MapBuilder`, a literal top-down camera render of the scene) uses for every name on it. `Model.Ops.Area` looks like the obvious candidate but isn't it at all. Read via the default (non-`includeInactive`) `FindObjectsOfType<MapLabel>()`, which already excludes not-yet-unlocked regions for free, since `Game.Progression.MapFeature` deactivates a locked region's `MapLabel` GameObject via `SetActive(false)` until unlocked. Icon-only labels (TextMeshPro `<sprite name="...">` tags with no real text, e.g. a decorative water-tower marker) are filtered out by stripping rich-text tags and skipping anything left blank.
-- **Locomotive supply points** (water/coal/diesel) come from `RollingStock.CarLoadTargetLoader`, matched on `load.name.ToLower()` (not `.id` — the two aren't interchangeable here). Its `sourceIndustry` field is explicitly nullable ("unlimited loads" when null), which is why water was never reachable through any `Model.Ops.Industry`-based system to begin with, unlike coal/diesel.
-- **Passenger stations** come from `Model.Ops.PassengerStop`, found via `FindObjectsOfType<PassengerStop>()` and filtered by its own `ProgressionDisabled` property. Each of a station's platform tracks (`PassengerStop.TrackSpans`) gets its own rendered rectangle — using that span's real endpoints (`TrackSpan.GetPoints()`) and length — so a multi-track station shows more than one. Rotation is derived client-side from the two endpoints after their screen-space transform, not computed once server-side, so it stays correct across the Flip X/Z toggles.
+- **CTC signals** come from `FindObjectsByType<CTCSignal>()` (active-only — an inactive signal here means "not unlocked this session," unlike cars where inactive means "streamed out"). Aspect comes from `CTCSignal.CurrentAspect`; live changes push via `SignalStorage.ObserveSignalAspect`, reached through `CTCPanelController.Shared.GetComponentInParent<SignalStorage>()`.
+- **Cargo info** comes from `Car.GetLoadInfo(slot)` for each of `Car.Definition.LoadSlots`, resolved to a `Load` via `CarLoadLibrary.GetLoad(...)`, formatted with the game's own `Load.QuantityString(quantity)`.
+- **Area/location names** come from `UI.Map.MapLabel` (just a `text` string on a world-positioned Canvas) — the same component the base game's own minimap (`UI.Map.MapBuilder`, a literal top-down camera render of the scene) uses for every name on it. `Model.Ops.Area` looks like the obvious candidate but isn't it at all. Read via the default (inactive-excluding) `FindObjectsByType<MapLabel>()`, which already excludes not-yet-unlocked regions for free, since `Game.Progression.MapFeature` deactivates a locked region's `MapLabel` GameObject via `SetActive(false)` until unlocked. Icon-only labels (TextMeshPro `<sprite name="...">` tags with no real text, e.g. a decorative water-tower marker) are filtered out by stripping rich-text tags and skipping anything left blank.
+- **Locomotive supply points** (water/coal/diesel) come from `RollingStock.CarLoadTargetLoader`, matched on its `loadId` (`rr/water`, `rr/coal`, `rr/diesel-fuel` — compared on the part after the `/`, so another pack's own water/coal/diesel loads match too). Its `sourceIndustry` field is explicitly nullable ("unlimited loads" when null), which is why water was never reachable through any `Model.Ops.Industry`-based system to begin with, unlike coal/diesel.
+- **Passenger stations** come from `Model.Ops.PassengerStop` (a plain class since 2026.1, not a component), enumerated via `PassengerStop.FindAll()` and filtered by its own `IsProgressionEnabled` property. Each of a station's platform tracks (`PassengerStop.TrackSpans`) gets its own rendered rectangle — using that span's real endpoints (`TrackSpan.GetPoints()`) and length — so a multi-track station shows more than one. Rotation is derived client-side from the two endpoints after their screen-space transform, not computed once server-side, so it stays correct across the Flip X/Z toggles.
 - **`.CenterPoint`, not `.transform.position`**, for both `IndustryComponent`-derived types and `PassengerStop` — their raw GameObject transform doesn't reliably line up with the component's actual in-world position, but `CenterPoint` (preferring the first `TrackSpan`'s midpoint when track spans are populated) does. Both branches of its getter already return game-space coordinates internally, so the result must not be run through `WorldTransformer.WorldToGame` a second time.
 - **Car status**: hotbox comes straight from `Car.HasHotbox`; handbrake from `Car.air.handbrakeApplied`. "Newly assigned a destination" and "arrived/spotted" are detected client-side by comparing each `live_state` tick's `atDestination`/`destinationName` against what was already held for that car, rather than the server pushing one-shot events — a dropped frame can't cause a missed transient flash this way.
-- **Coordinate system**: track/switch positions are in the game's "game space" coordinate system (`transform.localPosition`-based for track, `WorldTransformer.WorldToGame(transform.position)` for signals). Car positions from `UpdateMapIconPosition` come back in true world space via an internal `WorldTransformer.GameToWorld` call, so they're converted back with `WorldTransformer.WorldToGame` before being sent out. Everything is then Z-flipped to match the base game map's north-up orientation.
+- **Coordinate system**: track/switch positions are in the game's "game space" coordinate system (`TrackNode.Position`-based for track, `WorldTransformer.WorldToGame(transform.position)` for signals). The car-position fallback (a body transform) is in true world space, so it's converted with `WorldTransformer.WorldToGame` before being sent out. Everything is then Z-flipped to match the base game map's north-up orientation.
 - **Track grade** is computed from the same `TrackSegment.GetPositionRotationAtDistance` call already used to sample each segment's polyline — its rotation's pitch (`eulerAngles.x`), times `1.746` (the game's own small-angle tan-to-percent approximation), matches `Graph.GradeAtLocation`'s own formula exactly, with no extra per-point `Graph` calls needed.
 - **Engine Info panel** figures: `BaseLocomotive.RatedTractiveEffort`, `Car.Weight`/`Car.Condition`, and (for whole-train aggregates) `Car.EnumerateCoupled()`, which walks the full physically-connected consist regardless of which end the selected engine sits at. The real display name shown as "Model" is `Car.DefinitionInfo.Metadata.Name` — `Car.CarType` looks like it should be this but is actually just a short category code ("LS"/"LD" for any steam/diesel locomotive, regardless of specific class). The max-tonnage estimate is `TE / (8 + grade% × 20)`, a standard "ruling grade" tonnage-rating formula using the community rule-of-thumb 8 lbs/ton base resistance (rather than the nominal 3–5 lbs/ton for straight, level track) to account for curve resistance.
 - **Auto Engineer waypoints** resolve through `Model.AI.AutoEngineerPersistence(car.KeyValueObject).Orders` → `Graph.Shared.ResolveLocationString(...)` → `Graph.Shared.GetPositionRotation(location).Position`. The **Waypoint Queue** mod's own full queue, when installed, is read entirely via reflection (`WaypointQueueBridge.cs`) — this project has no compile-time dependency on that mod, so it degrades cleanly (just without queued-waypoint icons) if it isn't present. Its `ManagedWaypoint.StatusLabel` only ever reflects LIVE execution state (`"Inactive"` for anything not currently active), so the popup's "what's it actually configured to do" summary is instead translated from a wider set of the waypoint's own settings (coupling/uncoupling mode, refuel target, wait duration, speed change, etc.).
 - **Camera warp** dispatches through `CameraSelector.shared.JumpToPoint(...)`, which itself resolves whether the free/Strategy camera or the first-person character should move. Ground height at the target point is found server-side via a straight-down `Physics.Raycast` against the Terrain/Track layers, since the first-person character's teleport (unlike the free camera's) has no ground-snapping of its own.
-- **The `/minimap` console command** is registered as a real `UI.Console.IConsoleCommand`, not by listening to raw console input (an earlier version did that, and it had two real bugs as a result: typing the command without a leading `/` also got sent as an in-game chat message, and typing it with a `/` still printed the game's own "Command not recognized." first, since a plain event listener can't stop the game's own handler from also processing that same input). The catch: the game's own attribute-based auto-discovery for console commands only ever scans its own assembly, never a mod's — so this mod reaches `ConsoleCommandHandler`'s private command dictionary directly via reflection and inserts into it itself, the same dictionary the game's own built-in commands populate themselves into.
+- **The `/minimap` console command** is registered as a real game command (a `[ConsoleCommandHandler]` class with a `[ConsoleDefaultCommand]` method), not by listening to raw console input (an earlier version did that, and it had two real bugs as a result: typing the command without a leading `/` also got sent as an in-game chat message, and typing it with a `/` still printed the game's own "Command not recognized." first, since a plain event listener can't stop the game's own handler from also processing that same input). The catch: the game only scans its own assembly for those attributes, never a mod's — so this mod reaches `ConsoleCommandHandler`'s private `CommandProcessor` via reflection and calls its public `RegisterHandlers(Assembly)` with this mod's assembly, after which the game's own dispatcher, prefix matching, and `/help` handle it like any built-in command.
+- **Maintenance of Way** data comes from `Game.Mow.TrackConditionController.Shared`'s per-segment getters (`GetCondition`, `GetGradingClass`, `GetConstructionProgressByPhase`) plus `TrackSegment.PostedTrackClass` and `.ConstructionState`. The condition percentage is computed the way the game's own track tooltip computes it (condition as a fraction of the grading class's target, class N targeting N × 20%), and "speed restricted" uses the same test the game uses to paint slow-order stripes on the ties: the posted class allows less than the track's signed limit capped by its built class. It's polled every 5 seconds and only segments whose values changed are sent.
 - <a id="why-two-ports"></a>**Why two ports?** WebSocketSharp's combined `HttpServer` class (which can serve both static files and WebSocket connections from one listener) has a known, unresolved upstream bug ([sta/websocket-sharp#551](https://github.com/sta/websocket-sharp/issues/551)) where static-content responses come back empty in the browser. The companion page is served by a separate, plain `System.Net.HttpListener` instead, while WebSocketSharp's `WebSocketServer` (a completely different, working code path in the same library) continues to handle the `/ws` endpoint.
 - **A Unity `?.` gotcha worth knowing about**: Unity overrides `==`/`!=` on its objects so a destroyed object compares as `null`, but the `?.` null-conditional operator bypasses that override. Code in this project that resolves game singletons uses direct `== null` checks rather than `?.` for exactly this reason — a stale static reference to a destroyed object (e.g. `CTCPanelController.Shared` across a save switch) can otherwise throw `NullReferenceException` deep inside a Unity method call instead of being caught by the null check that looks like it should have caught it.
-- **Message protocol** — every WebSocket message is JSON with a `type` field: `track_network` (segments, switches, signals, areas, service points, and passenger stops, sent on connect or on request), `live_state` (car positions and status, including each locomotive's Auto Engineer/Waypoint Queue waypoints and whether Waypoint Queue was detected, ~10Hz), `switch_state` (pushed on individual switch throws), `signal_aspect` (pushed on individual signal aspect changes). The client can send `GET_TRACK_DATA` (force a fresh rebuild of everything in `track_network`), `SET_SWITCH:<id>` (throw a non-CTC switch), or `WARP_CAMERA:<x>,<z>` (teleport the in-game camera to a game-space point).
+- **Message protocol** — every WebSocket message is JSON with a `type` field: `track_network` (segments, switches, signals, areas, service points, and passenger stops, sent on connect or on request), `live_state` (car positions and status, including each locomotive's Auto Engineer/Waypoint Queue waypoints and whether Waypoint Queue was detected, ~10Hz), `switch_state` (pushed on individual switch throws), `signal_aspect` (pushed on individual signal aspect changes), `track_condition` (Maintenance of Way condition per segment id — a full snapshot right after every `track_network`, then only changed segments). The client can send `GET_TRACK_DATA` (force a fresh rebuild of everything in `track_network`), `SET_SWITCH:<id>` (throw a non-CTC switch), or `WARP_CAMERA:<x>,<z>` (teleport the in-game camera to a game-space point).
 
 ## Releasing
 
 Releases are built and published by a GitHub Actions workflow
 (`.github/workflows/release.yml`) that triggers on pushing a version tag
-(`vX.Y.Z`). It builds the mod, zips the three files a fresh install needs
-(the DLL, `websocket-sharp.dll`, `Info.json`), and publishes a GitHub
+(`vX.Y.Z`). It builds the mod, zips the two files a fresh install needs
+(the DLL and `Info.json`), and publishes a GitHub
 Release marked as a pre-release, with its notes pulled straight from
 [CHANGELOG.md](CHANGELOG.md).
 
 **Why this needs a self-hosted runner:** the project only compiles against
-Railroader's own game DLLs (`Assembly-CSharp.dll`, `UnityEngine.dll`, etc.),
+Railroader's own game DLLs (`Railroader.dll`, `UnityEngine.dll`, etc.),
 referenced from a local install — GitHub's hosted runners don't have the
 game, and those DLLs can't be redistributed through the repo or CI to make
 it "just build" there without running into the game's own copyright/ToS.
@@ -206,7 +212,7 @@ on a PC that already legitimately owns the game.
 
 ### Cutting a release
 
-1. Bump the version in **both** `Info.json` (`"Version"`) and
+1. Bump the version in **both** `Info.json` (`"version"`) and
    `MinimapServerCore.cs` (`PluginVersion`) — these are two separate
    constants with no automatic sync between them.
 2. Add a `## [X.Y.Z] - YYYY-MM-DD` section to the top of
@@ -217,8 +223,8 @@ on a PC that already legitimately owns the game.
 3. Commit and push those changes normally.
 4. Tag and push the tag:
    ```
-   git tag v0.9.0
-   git push origin v0.9.0
+   git tag v0.10.0
+   git push origin v0.10.0
    ```
    This is what actually triggers the workflow — pushing commits to `master`
    on its own does not.
@@ -230,11 +236,11 @@ on a PC that already legitimately owns the game.
 
 This project's own code is licensed under the [MIT License](LICENSE).
 
-It bundles [websocket-sharp](https://github.com/sta/websocket-sharp) (MIT License) as a NuGet dependency — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for its full license text.
+It uses [websocket-sharp](https://github.com/sta/websocket-sharp) (MIT License) for its WebSocket server — the copy that ships with the game itself, so this mod doesn't redistribute it.
 
 ## Acknowledgments
 
-- [Unity Mod Manager](https://www.nexusmods.com/site/mods/21) and [HarmonyLib](https://github.com/pardeike/Harmony) (bundled with UMM), which make this whole approach possible
+- [Unity Mod Manager](https://www.nexusmods.com/site/mods/21) and [HarmonyLib](https://github.com/pardeike/Harmony), which this mod was built on before Railroader had official mod support
 - [websocket-sharp](https://github.com/sta/websocket-sharp), the only working way to run a WebSocket server under Unity's Mono runtime (see the Technical Notes above for why)
 - **Map Enhancer**, a separate community mod for Railroader, was an invaluable reference during development. Studying its decompiled source directly led to two of this mod's core techniques:
   - Enumerating cars via `TrainController.Shared.Cars` combined with a Harmony patch on `Car.UpdateMapIconPosition`, rather than an unreliable scene scan

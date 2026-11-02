@@ -5,6 +5,27 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Version 0.10.0 (already set in `Info.json` and `PluginVersion`). Requires Railroader 2026.1 (the Maintenance of Way update) or newer; players on older game versions should stay on 0.9.0.
+
+### Added
+
+- Maintenance of Way track condition overlay ("Track Condition" toggle) — colors every segment by its condition (the same percentage the game's own track tooltip shows), and draws track under a wear speed restriction thicker
+- Track that hasn't been built yet is drawn dashed, in every mode, instead of looking like usable track
+- Tapping bare track now also shows its class, condition, and current max speed (and why), or for track under construction, its progress and which materials it still needs
+- New `track_condition` WebSocket message: a full per-segment snapshot after every `track_network`, then only segments that changed (polled every 5 seconds)
+
+### Changed
+
+- Loads through Railroader's built-in mod loader instead of Unity Mod Manager. Install into `Documents\Railroader\Mods\RailroaderMinimapServer`, turn on Preferences > Experimental > "Allow Unsafe DLL Mods", and enable the mod in the game's Mods screen. It's a client-scoped mod: not recorded in saves, not required of other multiplayer players
+- The mod is now a single DLL plus `Info.json`: it uses the WebSocketSharp library that now ships with the game instead of bundling its own copy, and no longer uses Harmony (which only exists in a game install when another mod loader put it there)
+- Rebuilt against Railroader 2026.1's reorganized game code (`Railroader.dll` replaces `Assembly-CSharp.dll`/`Definition.dll`; `CarType` replaces `CarArchetype`; track nodes, segments, passenger stops, and loads are no longer Unity objects; console commands use the new attribute-based system; game events moved to `EventBus`)
+- Switches, signals, and Maintenance of Way state are now dropped and re-read when a different save is loaded, instead of potentially holding on to the previous save's objects
+
+### Removed
+
+- Unity Mod Manager support
+- The `/minimap_url` console alias (it made `/mini` ambiguous under the game's new prefix matching); `/minimap` still works
+
 ## [0.9.0] - 2026-09-09
 
 ### Added

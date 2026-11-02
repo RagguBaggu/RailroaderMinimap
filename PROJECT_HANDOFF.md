@@ -9,7 +9,8 @@ file is developer/agent-facing.
 
 ## What this project is
 
-A Unity Mod Manager (UMM) mod for the game **Railroader** (Steam). It runs an
+A mod for the game **Railroader** (Steam), loaded by the game's own built-in
+mod loader (Railroader 2026.1+, the "Maintenance of Way" update). It runs an
 embedded HTTP + WebSocket server inside the game process, broadcasting live
 track/switch/signal/car data, and serves a self-contained companion web app
 (a single HTML file) that renders it as an interactive minimap. Works in a
@@ -21,16 +22,22 @@ world a second time. This project avoids that by reading game state directly
 and drawing a lightweight 2D representation instead.
 
 **Everything here is built on decompiled game internals (via ILSpy), not a
-public modding API.** There is no official Railroader modding documentation
-this relies on. A future game update could break any of it without warning.
+public modding API.** Since 2026.1 the game has an official mod *loader*
+(`Railroader.Modding.dll`: an entry-point interface, world lifecycle hooks,
+and a logger -- that's all of it), but every piece of game data this mod
+reads is still internal API. A future game update could break any of it
+without warning; 2026.1 itself broke a lot (see "Railroader 2026.1
+migration" below).
 
 ## Current file structure
 
 ```
 MinimapServerCore.cs      -- all actual logic (MonoBehaviour): server, game-state reading,
-                              Harmony patch, WebSocket/HTTP handling, console command
-UnityModManagerEntry.cs   -- thin UMM-specific entry point: wires logging, calls
-                              Load()/OnToggle(), attaches MinimapServerCore to a GameObject
+                              MoW track condition, WebSocket/HTTP handling, console command
+GameModEntry.cs           -- thin entry point for the game's built-in loader
+                              (IModEntryPoint + IWorldLifecycle): wires logging,
+                              attaches MinimapServerCore to a GameObject, forwards
+                              world load/unload
 Log.cs                    -- tiny logging abstraction (Action<string> handlers) so the
                               core file has zero direct dependency on any loader's logging API
 DataModels.cs             -- all DTOs (plain C# classes) sent over the WebSocket as JSON
@@ -41,10 +48,10 @@ WaypointQueueBridge.cs    -- reflection-only soft dependency on the third-party 
 CompanionApp.html         -- the entire client: HTML+CSS+JS in one file, embedded into the
                               DLL as a resource, served by the mod's own HTTP listener
 RailroaderMinimap.csproj  -- single project file (see "Build" below)
-Info.json                 -- UMM manifest
+Info.json                 -- the game's asset-pack manifest (identifier, scope,
+                              "assemblies" list naming the DLL to load)
 README.md                 -- user-facing docs
 LICENSE                   -- MIT, this project's own code
-THIRD_PARTY_LICENSES.md   -- MIT text for the bundled websocket-sharp dependency
 ```
 
 Historical note: this was originally a BepInEx plugin, later ported to
@@ -53,21 +60,31 @@ two thin per-loader entry points, then **BepInEx support was dropped
 entirely** (the user chose to focus solely on UMM after fighting several
 loader-interop build issues -- see "Resolved gotchas" below). The
 `MinimapServerCore`/entry-point split was kept even after dropping BepInEx,
-since it's good separation of concerns regardless of loader count.
+since it's good separation of concerns regardless of loader count. In 0.10.0
+**UMM was dropped too**, in favor of the game's own built-in loader (the user
+chose built-in-only over supporting both). 0.9.0 is the last UMM release and
+the last one that works on pre-2026.1 game versions.
 
 ## Architecture
 
 - **`MinimapServerCore`** is a plain `MonoBehaviour` (not tied to any loader
-  base class). `UnityModManagerEntry.Load()` wires up `Log`'s handlers to
-  UMM's `modEntry.Logger`, then calls `gameObject.AddComponent<MinimapServerCore>()`
-  (or creates a new GameObject for it). `UnityModManagerEntry.OnToggle()`
-  handles UMM's runtime enable/disable by creating/destroying that GameObject.
+  base class). `GameModEntry.OnModLoad()` wires up `Log`'s handlers to the
+  game's `IModContext.Log`, then creates a `DontDestroyOnLoad` GameObject and
+  adds `MinimapServerCore` to it. `OnModUnload()` tears it down with
+  `DestroyImmediate` (see the built-in loader notes below for why not
+  `Destroy`). `OnWorldLoad`/`OnWorldUnload` (`IWorldLifecycle`) forward to the
+  core, which drops every reference into the old world on unload.
 - **Two servers on two ports**: an HTTP listener (`System.Net.HttpListener`,
   port 8080) serves the static `CompanionApp.html`; a separate
   `WebSocketSharp.Server.WebSocketServer` (port 8081) handles the `/ws`
   live-data feed. They're split because WebSocketSharp's combined
   `HttpServer` class has a known bug (sta/websocket-sharp#551) where static
-  file responses come back empty.
+  file responses come back empty. WebSocketSharp is the copy the game itself
+  ships in `Managed/WebSocketSharp.dll` since 2026.1 (assembly name
+  `WebSocketSharp`, unlike the NuGet package's `websocket-sharp`), referenced
+  with `Private=False` -- so the mod is one DLL with no dependencies to
+  bundle. That build's `AddWebSocketService<T>` takes an `Action<T>`
+  initializer for a `new()`-constructed behavior, not a factory `Func<T>`.
 - **Track/switch/signal data** is static -- extracted once via
   `TrackExtractor`, cached as JSON, and re-broadcast only when it changes
   (Graph rebuild, or an ABS/CTC mode switch). Live updates for individual
@@ -75,10 +92,107 @@ since it's good separation of concerns regardless of loader count.
   the whole network.
 - **Car data** is dynamic -- gathered fresh every broadcast tick (~10Hz) from
   `TrainController.Shared.Cars`.
+- **Track condition (Maintenance of Way)** is semi-static: polled every 5 s
+  (`BroadcastTrackCondition`), only changed segments sent. A full snapshot
+  always follows every `track_network` broadcast, since it's keyed by
+  segment id and meaningless without the matching network.
 - **Message protocol**: every WebSocket message is JSON with a `type` field.
   Server -> client: `track_network`, `live_state`, `switch_state`,
-  `signal_aspect`. Client -> server: plain strings, `GET_TRACK_DATA` and
-  `SET_SWITCH:<id>`.
+  `signal_aspect`, `track_condition`. Client -> server: plain strings,
+  `GET_TRACK_DATA`, `SET_SWITCH:<id>`, `WARP_CAMERA:<x>,<z>`.
+
+## Railroader 2026.1 migration (what changed, and where things went)
+
+Found by decompiling the 2026.1 Experimental build's `Railroader.dll` in full
+(`ilspycmd -p -o <dir> -r <Managed> Railroader.dll`, then grep -- much faster
+than one `-t` type at a time when many things moved at once).
+
+- **Assemblies**: nearly all game code moved from `Assembly-CSharp.dll` +
+  `Definition.dll` into **`Railroader.dll`**. `Assembly-CSharp.dll` is now a
+  4 KB stub with one unrelated class; `Definition.dll` is gone.
+- **Compiler gotcha when re-targeting**: the first build after the reference
+  swap reported only ~4 errors (unresolved `using`s, a missing attribute
+  type). Roslyn skipped binding method bodies while declaration-level errors
+  existed, so the real breakage (removed methods, types that stopped being
+  `UnityEngine.Object`s) only appeared after fixing those. Don't trust a
+  short error list after a game update until it builds clean.
+- `GalaSoft.MvvmLight.Messaging.Messenger.Default` -> **`Game.Events.EventBus`**
+  (`Subscribe<T>(UnityEngine.Object listener, Action<T>)`, `Unsubscribe(listener)`).
+- `CarArchetype` enum and `Car.Archetype` -> **`Car.CarType`**, now a
+  `Model.CarType` struct (implicit to/from string) with prefix helpers:
+  `IsLocomotiveSteam` ("LS"), `IsLocomotiveDiesel` ("LD"), `IsTender` ("LT"),
+  `IsCoach` ("PB"), `IsBaggage` ("CB"), `IsCaboose` ("NE"),
+  `IsMaintenanceOfWay` ("MW"), `IsFreight`.
+- `TrackNode` and `TrackSegment` are **plain classes now, not
+  MonoBehaviours** -- no `.name`, no `.transform`. Node position is
+  `TrackNode.Position`, the same graph space `TrackSegment.CreateBezier` builds
+  curves from. Ids are just `.id`.
+- `TrackSegment.GetExpectedSpeedLimit()` is gone -> `EffectiveSpeedLimitMph`
+  (`speedLimit`, 0 meaning the railroad-wide `RailroadSpeedLimitMph`).
+- `Load` is plain data now (no ScriptableObject `.name`), with namespaced ids:
+  `rr/water`, `rr/coal`, `rr/diesel-fuel`, `rr/passengers`. Lookup moved from
+  `CarPrototypeLibrary.instance.LoadForId` to static
+  **`Model.Ops.Definition.CarLoadLibrary.GetLoad(id)`**.
+  `CarLoadTargetLoader` stores the id directly as `loadId` (its `load`
+  property just calls `CarLoadLibrary.GetLoad(loadId)`).
+- `Model.Ops.PassengerStop` is a plain class (not findable via
+  `FindObjectsOfType`) -> enumerate with `PassengerStop.FindAll()` (=
+  `OpsController.Shared.AllPassengerStops`). `ProgressionDisabled` ->
+  `IsProgressionEnabled`. `.name`, `.CenterPoint`, `.TrackSpans` remain.
+- Console commands: `IConsoleCommand` + `[ConsoleCommand]` + the `_commands`
+  dictionary are gone. See the `/minimap` entry below for the new system.
+- `UnityEngine.Object.FindObjectsOfType<T>()` is deprecated in this Unity
+  version -> `FindObjectsByType<T>(FindObjectsSortMode.None)` (still excludes
+  inactive objects by default).
+- **Harmony is not part of the game.** A `0Harmony.dll` in `Managed/` on a
+  modded install was put there by another loader (Railloader / UMM -- check
+  its timestamp against `Railloader.Injector.dll`). A built-in-loader mod
+  can't assume it exists, which is why the `Car.UpdateMapIconPosition`
+  postfix was removed (see the car-position entry below).
+
+### The built-in mod loader
+
+- Packs are folders under `Documents\Railroader\Mods\` (`UserPaths.
+  RailroaderDirectory`, overridable with `-homedir`), plus `ModDev\` for
+  writeable development packs. **Not** `<game>\Mods\` -- that's UMM's.
+- Manifest is `Info.json` (`AssetPack.Common.AssetPackInfo`, parsed with
+  Newtonsoft, so case-insensitive and unknown fields ignored). Required:
+  `identifier` matching `domain/name` (lowercase letters, digits, `-`, `.`;
+  each part starting with a letter). `scope`: `unscoped` (default; recorded
+  in saves, required of multiplayer peers), `optional`, or **`client`**
+  (per-player, not recorded, own list in the Mods screen -- what this mod
+  uses). `dependencies.required` takes `"id [constraint]"` strings, e.g.
+  `"rr/game"` or `"rr/game >=2026.1.0"`.
+- `assemblies`: DLLs (paths relative to the pack) the game `Assembly.LoadFrom`s.
+  **Every listed DLL must contain a public `IModEntryPoint`** or it logs an
+  error and is skipped -- don't list plain dependency DLLs there (none needed
+  now anyway). `GetExportedTypes()` is called on it, so every public type must
+  resolve against assemblies the game has.
+- DLL mods only load when Preferences > Experimental > **"Allow Unsafe DLL
+  Mods"** is on (takes effect on restart).
+- `AssetPackManager` can unload and reload packs mid-session
+  (`ApplyModConfig`, e.g. switching to a save with a different mod set): it
+  calls `OnModUnload` on the old entry point and immediately `OnModLoad` on a
+  fresh instance. `Object.Destroy` is deferred to end of frame, so tearing
+  down with it would leave the old server holding ports 8080/8081 while the
+  new one tries to bind them -- hence `DestroyImmediate`.
+- Logging: `IModContext.Log` is a Serilog logger tagged with the pack id,
+  written to the Unity console -> `Player.log` in
+  `%USERPROFILE%\AppData\LocalLow\Giraffe Lab LLC\Railroader\`. Messages
+  are Serilog *templates*: literal `{...}` in a message is treated as a
+  placeholder (rendered as-is when there's no matching property, so harmless
+  in practice).
+
+### The game's built-in HTTP server (and why this mod doesn't use it)
+
+`HTTP.GameServer` (2026.1): off by default (Preferences > Experimental > "HTTP
+Server", or `-httpserver`), port 8630, WebSocketSharp `HttpServer` with
+`/api/info`, `/api/services`, and a `/ws` game-state socket. It binds
+**`IPAddress.Loopback` only** and `LocalOriginPolicy` rejects any Host/Origin
+that isn't `localhost`/`127.0.0.1`/`[::1]` -- so a phone or tablet on the LAN,
+the main use case here, can't reach it. `RegisterHttpGetHandler`/
+`RegisterWebSocketService` exist but `GameServer._httpServer` is private.
+Decision (with the user): keep this mod's own 8080/8081 listeners.
 
 ## Key game APIs discovered (expensive to rediscover -- decompiled via ILSpy)
 
@@ -109,14 +223,17 @@ after a game update, these are the exact APIs to re-verify first.
   top-level type -- must be qualified as `Car.LogicalEnd.A`/`.B`). Used to
   find a locomotive's coupled tender (check both ends, since orientation
   varies) so fuel/water can be surfaced in the engine's own popup.
-- A Harmony postfix patch on `Car.UpdateMapIconPosition` captures the same
-  live position the game's own built-in minimap uses, as a fallback source
-  when the Graph-based center computation isn't available.
+- Fallback position when the Graph-based center computation isn't
+  available (no valid `LocationF`/`LocationR` yet): `car.BodyTransform`
+  (world space -> `WorldTransformer.WorldToGame`). This was a Harmony postfix
+  on `Car.UpdateMapIconPosition` until 0.10.0, but that method is handed
+  exactly the position the body is moved to, and Harmony isn't available to
+  a built-in-loader mod (see migration notes above).
 - `WorldTransformer.WorldToGame(Vector3)` / `.GameToWorld(Vector3)` -- the
   coordinate conversion between true Unity world space and the game's
-  internal "game space" (which is what track/segment positions use). Car
-  positions captured via the Harmony patch come back in world space and must
-  be converted back with `WorldToGame`.
+  internal "game space" (which is what track/segment positions use). The
+  body-transform car-position fallback is in world space and must be
+  converted back with `WorldToGame`.
 - `MapCoordinates.MapZ(z)` = `-z` -- Z-axis flip needed for north-up
   orientation matching the base game's own map.
 - `TrackNode.isThrown` (lowercase i), `TrackNode.OnDidChangeThrown` (event),
@@ -135,9 +252,10 @@ after a game update, these are the exact APIs to re-verify first.
   for a plain click. Used for the tap-to-throw-switch feature. CTC-controlled
   switches are refused server-side before this is ever called.
 - `Car.Definition.LoadSlots`, `Car.GetLoadInfo(slot)` (extension method
-  returning `CarLoadInfo? { LoadId, Quantity }`), `CarPrototypeLibrary.instance
-  .LoadForId(loadId)` -> `Load` (`.QuantityString(quantity)` gives an
-  already-formatted string like `"50,000 lbs Coal"`).
+  returning `CarLoadInfo? { LoadId, Quantity }`), `CarLoadLibrary.GetLoad(
+  loadId)` -> `Load` (`.QuantityString(quantity)` gives an already-formatted
+  string like `"50,000 lbs Coal"`). Was `CarPrototypeLibrary.instance
+  .LoadForId` before 2026.1.
 - `Car.Waybill` -> `OpsController.Shared.AreaForCarPosition(destination)` ->
   `Area.tagColor` -- the exact color the base game's own Tab-key destination
   overlay uses. Freight cars use this; engines/tenders/passenger cars
@@ -183,23 +301,27 @@ after a game update, these are the exact APIs to re-verify first.
   the same text. The actual, structured way to add a console command is
   `UI.Console.IConsoleCommand` (one method, `string Execute(string[]
   components)`) + `[UI.Console.ConsoleCommand("/name", "description")]` on
-  the implementing class -- **but** `UI.Console.ConsoleCommandHandler.
-  RegisterAllConsoleCommands` auto-discovers these via `Assembly.
-  GetExecutingAssembly().GetTypes()`, which only ever means the *game's*
-  own assembly, never a mod's, no matter how the attribute is applied.
-  Getting a mod's own command in requires reaching
-  `ConsoleCommandHandler`'s private `_commands` field (a plain
-  `Dictionary<string, IConsoleCommand>`, confirmed via decompiling) through
-  reflection and inserting into it directly -- the exact same dictionary
-  its own commands populate themselves into, just reached from outside.
-  Once that live reference is obtained, no further reflection is needed to
-  use it. See `MinimapConsoleCommand`/`TryRegisterConsoleCommand` in
-  `MinimapServerCore.cs`. The attribute is still applied to the mod's own
-  command class even though auto-discovery can't see it, because
-  `UI.Console.Console`'s own `/help` command reads a command's name/
-  description straight off that same attribute via reflection --
-  omitting it would throw a `NullReferenceException` the moment `/help`
-  reached this entry.
+  the implementing class (pre-2026.1). **2026.1 replaced that** with an
+  attribute-based system: a class with `[UI.Console.ConsoleCommandHandler(
+  "/name", "description")]`, whose *non-public* methods carry
+  `[ConsoleDefaultCommand]` (bare `/name`) or `[ConsoleSubcommand]`
+  (`/name sub ...`); parameters are parsed from the typed arguments by
+  `Convert.ChangeType`, and the game constructs the class itself with
+  `Activator.CreateInstance` per invocation (so it reaches the server via a
+  static `Instance`). `ConsoleCommandHandler.Awake` still only scans
+  `Assembly.GetExecutingAssembly()` -- the game's own -- but the scan itself
+  is the public `CommandProcessor.RegisterHandlers(Assembly)`. So: reflect
+  `ConsoleCommandHandler`'s private `_processor` field, call
+  `RegisterHandlers(typeof(...).Assembly)`, and everything else (dispatch,
+  unique-prefix matching, `/help`, usage text) is the game's own code.
+  Unregistering removes the key (command name without `/`) from
+  `CommandProcessor`'s private `_handlers` dictionary (its value type is an
+  internal struct, so it's handled as a non-generic `IDictionary`).
+  `RegisterHandlers` logs an error for an already-registered name, so check
+  `_handlers` first. The console object is re-checked every tick in case the
+  game recreates it. The old `/minimap_url` alias was dropped: with prefix
+  matching, it made `/mini` ambiguous. See `TryHookConsole` and
+  `MinimapConsoleCommand` in `MinimapServerCore.cs`.
 - **`UI.Map.MapLabel` is the actual source of every name shown on the base
   game's own minimap** -- `Model.Ops.Area` is NOT it (a common wrong guess,
   since `Area` looks like the obvious candidate and is otherwise useful for
@@ -260,7 +382,10 @@ after a game update, these are the exact APIs to re-verify first.
     unlimited loads are provided") -- exactly why water (free, unlimited)
     was never reachable through the Industry-based systems above; it was
     never Industry-linked to begin with, for any of the three loads, not
-    just water. **Match on `load.name.ToLower()` -- NOT `load.id`.**
+    just water. **2026.1: match on `loader.loadId` (`rr/water`, `rr/coal`,
+    `rr/diesel-fuel`), compared on the part after the `/`.** `Load` no
+    longer has a `.name` at all. Historical, pre-2026.1: **match on
+    `load.name.ToLower()` -- NOT `load.id`.**
     WaypointQueue's own code matches `load?.name?.ToLower()`; an earlier
     version of this extraction assumed `.id` would be equivalent (it works
     fine for `IndustryUnloader` elsewhere in this file) and silently
@@ -292,11 +417,11 @@ after a game update, these are the exact APIs to re-verify first.
     the mod folder instead of `Railroader_Data\Managed`) can be more
     direct than continuing to search the base game alone.
   - **Passenger stations**: `Model.Ops.PassengerStop` is a distinct type
-    from `Industry` (both extend `GameBehaviour`, but separately) --
-    found directly via `FindObjectsOfType<PassengerStop>()`. It also
-    implements `IProgressionDisablable`, so unlock state is a real
-    `.ProgressionDisabled` property check, not GameObject-active-state
-    like `MapLabel`/`CTCSignal` use. Unlike `CarLoadTargetLoader`, this
+    from `Industry`. Since 2026.1 it's a plain class (not a component):
+    enumerate via `PassengerStop.FindAll()`, unlock state via
+    `.IsProgressionEnabled` (was `FindObjectsOfType<PassengerStop>()` and
+    `.ProgressionDisabled`), not GameObject-active-state like
+    `MapLabel`/`CTCSignal` use. Unlike `CarLoadTargetLoader`, this
     one DOES need the `.CenterPoint`-over-`.transform.position` fix below.
   - **Use `.CenterPoint`, not `.transform.position`, for `PassengerStop`
     (and any `IndustryComponent`, e.g. `IndustryUnloader`, if one gets
@@ -401,6 +526,28 @@ after a game update, these are the exact APIs to re-verify first.
   `Dictionary<string, PropertyInfo>` of ManagedWaypoint's public properties
   built once, rather than one hand-declared `PropertyInfo` field per
   property.
+- **Maintenance of Way (2026.1)** -- `Game.Mow.TrackConditionController.
+  Shared` (a `GameBehaviour`; its `Shared` getter does a
+  `FindAnyObjectByType` whenever the cached one is null, so don't call it
+  every frame when none exists). Public per-segment getters:
+  `GetCondition(seg)` (0-1, 1 = pristine), `GetConditionImpliedClass`,
+  `GetGradingClass` (class it was built/maintained to, or its in-progress
+  target while under construction), `GetConstructionState`,
+  `GetConstructionProgressByPhase` (0-1). On the segment itself:
+  `TrackSegment.PostedTrackClass` (the class actually in effect -> speed
+  restriction) and `.ConstructionState` (`Track.TrackConstructionState`
+  flags: 1 rails, 2 ties, 4 ballast, 8 blasting, 16 abutments, 32 bridge
+  wood, 64 bridge steel, 128 portals; 0 = complete). Turntable segments
+  (`!IsRightOfWay`) are always reported pristine. The useful formulas are
+  all `internal` in `TrackConditionModel`, so `MinimapServerCore`/the client
+  replicate them: class from condition (<=0.2 -> 1, <=0.4 -> 2, <=0.6 -> 3,
+  <=0.8 -> 4, else 5); class N targets condition N*0.2; max speed per class
+  10/25/40/60/80 mph; tooltip text `"Class {grading} track, {pct}%
+  condition"` with pct = floor(min(condition/target,1)*100), or 100 when
+  within 0.001 of target; "slow order" tie stripe when max(posted) <
+  min(signed limit, max(grading)). Construction milestones now place
+  unbuilt segments in the Graph, so they render (dashed) rather than being
+  absent.
 - **AssetRipper (`winget install AssetRipper.AssetRipper`) is fully
   scriptable via plain HTTP, not just its browser GUI** -- despite
   shipping as a Blazor-ish local web app, `POST /LoadFolder` and
@@ -448,8 +595,9 @@ after a game update, these are the exact APIs to re-verify first.
    on the command line instead, or put the projects in separate folders
    entirely (the cleaner fix). N/A currently since there's only one project.
 
-5. **BepInEx's and UMM's bundled Harmony versions are different and
-   genuinely incompatible on some APIs.** BepInEx's newer Harmony marks
+5. *(Moot since 0.10.0 dropped Harmony entirely.)* **BepInEx's and UMM's
+   bundled Harmony versions are different and genuinely incompatible on some
+   APIs.** BepInEx's newer Harmony marks
    `Harmony.UnpatchAll(string)` obsolete-as-error, recommending
    `UnpatchSelf()`; UMM's older bundled Harmony doesn't have `UnpatchSelf()`
    at all. Currently moot (UMM-only now), but if BepInEx support is ever
@@ -464,8 +612,9 @@ after a game update, these are the exact APIs to re-verify first.
    single project, but worth remembering if a second build target is ever
    added.
 
-7. **A UMM GitHub issue (newman55/unity-mod-manager#133) specifically
-   discusses Railroader mods with more than one DLL** (this mod ships
+7. *(Moot since 0.10.0: no UMM, and a single DLL.)* **A UMM GitHub issue
+   (newman55/unity-mod-manager#133) specifically discusses Railroader mods
+   with more than one DLL** (this mod ships
    `WebSocketSharp.dll` alongside the main assembly) **failing to load
    depending on UMM's install method.** Confirmed working on **DoorstopProxy**
    for this project. If a user reports the mod not loading at all under UMM,
@@ -502,7 +651,7 @@ after a game update, these are the exact APIs to re-verify first.
 6. Cargo/load display in car popups, including a locomotive's coupled
    tender's fuel/water.
 7. UMM port (after a period of supporting both loaders, then dropping
-   BepInEx entirely).
+   BepInEx entirely). Replaced in 0.10.0 by the game's built-in loader.
 8. In-game `/minimap` console command (`/minimap_url` alias kept), properly
    registered into the game's own command system rather than raw-listened
    for, printing connection URLs.
@@ -535,6 +684,11 @@ after a game update, these are the exact APIs to re-verify first.
     the first-person character) to that spot -- see `CameraSelector.
     JumpToPoint` above for the game API, and `HandleWarpCameraCommand` in
     `MinimapServerCore.cs` for the ground-height raycast this needed.
+14. Railroader 2026.1 port (0.10.0): built-in mod loader, single-DLL
+    packaging, and a Maintenance of Way overlay -- "Track Condition" toggle
+    (condition color ramp, thick = speed restricted), unbuilt track always
+    dashed, and condition/max speed/construction progress in the tap-track
+    popup.
 
 ## Known open items / not yet done
 
@@ -553,10 +707,16 @@ after a game update, these are the exact APIs to re-verify first.
 - **The axle-to-full-length fudge factor (1.35) for per-car icon sizing is an
   estimate, not verified against actual car model dimensions.** May need
   visual tuning.
-- **`ModEntry.Logger.Warning(...)`'s existence was inferred by convention**,
-  not directly confirmed in UMM's public docs/examples (only `.Log()` and
-  `.Error()` were directly confirmed) -- it did compile successfully, so this
-  is resolved in practice, just noting the provenance.
+- **The 0.10.0 port compiles cleanly and the companion app's MoW overlay was
+  checked in a headless browser against synthetic data, but none of it has
+  been run in-game yet.** First things to verify in the real game: the mod
+  shows up in the Mods screen and loads (Player.log), `/minimap` works,
+  switch markers line up with the track (`TrackNode.Position`), supply-point
+  and passenger-station icons appear, and real `track_condition` values look
+  sane against the game's own track tooltip.
+- **The WaypointQueue bridge is untested against a 2026.1 build of that
+  mod.** It's reflection-only and degrades to "not installed" if its
+  internals changed.
 
 ## Build
 
@@ -568,10 +728,12 @@ dotnet build RailroaderMinimap.csproj -c Release
 ```
 
 Output: `bin\Release\net48\RailroaderMinimapServer.dll`. Install alongside
-`WebSocketSharp.dll` and `Info.json` in a `RailroaderMinimapServer` folder
-under UMM's `Mods` directory.
+`Info.json` in a `RailroaderMinimapServer` folder under
+`Documents\Railroader\Mods\`. The `DeployToModsFolder` target in the
+`.csproj` does exactly that after every build (`ModDeployDir`; the release
+workflow points it at a scratch folder instead).
 
-The `.csproj` has hardcoded `HintPath`s for the game's own assemblies and for
-UMM/Harmony, both under a `$(RailroaderDir)` MSBuild property near the top of
-the file -- update that one property if the game is installed somewhere
-other than the default Steam path.
+The `.csproj` has hardcoded `HintPath`s for the game's own assemblies, all
+under a `$(RailroaderDir)` MSBuild property near the top of the file --
+update that one property (or pass `-p:RailroaderDir=...`) if the game is
+installed somewhere else.
