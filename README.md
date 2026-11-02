@@ -18,6 +18,7 @@ Unlike the game's built-in minimap, this doesn't render the world a second time 
 - **Car status indicators** — a hotbox or an applied handbrake shows as a small badge on the car itself (and recolors its name label) for as long as the problem actually lasts; a car being assigned a new destination, or arriving/being spotted at one, flashes briefly instead. A dismissible message feed logs each of these with the car, cargo, and location involved, so you don't have to be looking at the map when it happens
 - **Cargo details** — tap any car to see what it's carrying and how much, using the game's own formatted quantity strings (e.g. "50,000 lbs Coal")
 - **Track grade color-coding** — an optional white→yellow→red overlay on every track segment showing its grade at a glance ("Grade Color" toggle); tap any bare stretch of track to see its exact grade in a popup
+- **Curve labels** — curves are labeled with their curvature in degrees of curve (the unit the game itself uses), once per curve at its sharpest point rather than on every short segment that makes it up. Shorter curves appear as you zoom in, and labels never overlap. Their own "Curve Label Size" slider sizes them independently of everything else. Tapping track also shows its curvature, plus the speed the Auto Engineer holds to there when the curve is what limits it
 - **Maintenance of Way track condition** — an optional overlay ("Track Condition" toggle) coloring every segment by its condition, using the same percentage as the game's own track tooltip, with track under a wear speed restriction drawn thicker so slow orders stand out. Track that hasn't been built yet is always drawn dashed. Tapping bare track shows its class, condition, and current max speed (and why), or for track under construction, its progress and which materials it still needs
 - **Engine Info panel** — a toggleable per-engine dropdown showing type, model, tractive effort, repair condition, fuel, and hotbox/handbrake status; whole-train aggregates (car count and combined tractive effort when coupled to other cars/engines, plus consist weight — the engine, its tender, their fuel/water, and everything coupled, rounded the same way as the game's own HUD); and an approximate maximum-tonnage calculation for whatever grade you last tapped on the track
 - **Auto Engineer waypoint visualization** — scoped to the engine currently selected in the Engine Info panel: the base game's own single waypoint order, plus, if the **Waypoint Queue** mod is installed, its complete queue in order, each shown as an oversized arrow icon (numbered by queue position). Tap one for its live status and a plain-language summary of what it's actually configured to do — couple, uncouple, refuel, wait, change speed, and so on — not just its current runtime state
@@ -71,16 +72,19 @@ Forgot the address, or need it again without alt-tabbing to the log? Open the in
 | Pan | Click and drag | One-finger drag |
 | View details | Tap/click a car, switch, signal, or waypoint arrow | same |
 | **Throw a switch** | **Tap/click a non-CTC switch** | **same** |
-| View a track's grade and condition | Tap/click bare track | same |
+| View a track's grade, curvature, and condition | Tap/click bare track | same |
 | **Warp the in-game camera** | **Right-click anywhere on the map, then "Warp camera here"** | **Long-press anywhere on the map, then "Warp camera here"** |
-| Toggle grade color overlay | "Grade Color" button | same |
-| Toggle track condition overlay | "Track Condition" button | same |
+| Open map display options | "Options" button (closes on Escape, ×, or a click outside it) | same |
+| Toggle grade color overlay | Options → "Grade Color" | same |
+| Toggle track condition overlay | Options → "Track Condition" | same |
+| Toggle curve labels | Options → "Curve Labels" | same |
 | Open the Engine Info panel | "Engine Info" button, then pick an engine from the dropdown | same |
 | Pin every engine's info | "Pin Engine Info" button | same |
 | Reset view | "Reset View" button | same |
-| Fix map orientation | "Flip X" / "Flip Z" buttons | same |
-| Adjust text size | "Text Size" slider | same |
-| Adjust area label size | "Area Label Size" slider | same |
+| Fix map orientation | Options → "Flip X" / "Flip Z" | same |
+| Adjust text size | Options → "Text Size" slider | same |
+| Adjust area label size | Options → "Area Label Size" slider | same |
+| Adjust curve label size | Options → "Curve Label Size" slider | same |
 | Collapse/expand the legend | Click the "LEGEND" header | same |
 | Dismiss a status message | "×" on its card | same |
 
@@ -96,6 +100,7 @@ The companion app has its own built-in legend (bottom-left, collapsible) that re
 - **Circular stand icon** — switch (green = normal, red = reversed); labeled "CTC" underneath if it's signal-controlled and locked out at the track
 - **Signal mast** — top lamp lit = Clear, middle = Approach, bottom = Stop/Restricting (diverging aspects share the same lamp/color)
 - **Large text** — area/location name
+- **Small violet number with a °** — a curve's curvature in degrees of curve, at its sharpest point
 - **Small circle with a droplet/lump/diamond glyph** — water/coal/diesel supply point (shape differs per kind, not just color, so they stay distinguishable if you're colorblind)
 - **Tan rectangle** — passenger station platform, sized to the real platform
 - **Small badge on a car** (flame, wheel, checkmark, or arrow) — hotbox, handbrake, spotted, or new-destination-assigned, matching the message feed
@@ -139,7 +144,7 @@ This mod's server has **no authentication**. Anyone on your local network can co
 - **Waypoint Queue integration is a soft, reflection-based dependency on another mod's internals**, which is one layer more fragile than the point above — an update to Waypoint Queue itself (not just the base game) could change its internal class/property names and silently stop this mod's queued-waypoint display from working, without affecting anything else in this mod (the base game's own single waypoint, and every other feature, are unaffected either way).
 - **Camera warp moves only the requesting player's own camera/character**, not shared state broadcast to other players — this hasn't been specifically re-tested in multiplayer, but there's no reason to expect it would behave differently there, since `CameraSelector` is inherently a local, per-client concept in the base game already (each player has their own camera).
 - The companion app's connection URL uses `location.hostname` from the page it's served on — if you're doing something unusual with DNS or a reverse proxy in front of this, you may need to adjust `CompanionApp.html` directly.
-- Custom maps (if added via FUSE in the future) may use a different world-orientation convention than the base game map — the Flip X/Flip Z buttons exist specifically as a manual override if a map ever renders mirrored.
+- Custom maps (if added via FUSE in the future) may use a different world-orientation convention than the base game map — the Flip X/Flip Z options exist specifically as a manual override if a map ever renders mirrored.
 
 ## Technical notes
 
@@ -158,6 +163,7 @@ For anyone extending this mod or just curious how it works:
 - **`.CenterPoint`, not `.transform.position`**, for both `IndustryComponent`-derived types and `PassengerStop` — their raw GameObject transform doesn't reliably line up with the component's actual in-world position, but `CenterPoint` (preferring the first `TrackSpan`'s midpoint when track spans are populated) does. Both branches of its getter already return game-space coordinates internally, so the result must not be run through `WorldTransformer.WorldToGame` a second time.
 - **Car status**: hotbox comes straight from `Car.HasHotbox`; handbrake from `Car.air.handbrakeApplied`. "Newly assigned a destination" and "arrived/spotted" are detected client-side by comparing each `live_state` tick's `atDestination`/`destinationName` against what was already held for that car, rather than the server pushing one-shot events — a dropped frame can't cause a missed transient flash this way.
 - **Coordinate system**: track/switch positions are in the game's "game space" coordinate system (`TrackNode.Position`-based for track, `WorldTransformer.WorldToGame(transform.position)` for signals). The car-position fallback (a body transform) is in true world space, so it's converted with `WorldTransformer.WorldToGame` before being sent out. Everything is then Z-flipped to match the base game map's north-up orientation.
+- **Curvature** is the game's own `Graph.CurvatureOfSegment(segment)`: degrees of curve at the segment's sharpest point (five evenly spaced samples, whole degrees). The curve speed is `TrainMath.CalculateMaxSpeedMph(graph, segment, 23)`, the limit the Auto Engineer plans with, for standard equipment (23° is the equipment curve limit the game's own MoW traffic estimates assume; it only matters on sharper curves). The client merges consecutive curved segments that meet at a plain, non-switch node into one curve, labeled once at its sharpest segment.
 - **Track grade** is computed from the same `TrackSegment.GetPositionRotationAtDistance` call already used to sample each segment's polyline — its rotation's pitch (`eulerAngles.x`), times `1.746` (the game's own small-angle tan-to-percent approximation), matches `Graph.GradeAtLocation`'s own formula exactly, with no extra per-point `Graph` calls needed.
 - **Engine Info panel** figures: `BaseLocomotive.RatedTractiveEffort`, `Car.Weight`/`Car.Condition`, and (for whole-train aggregates) `Car.EnumerateCoupled()`, which walks the full physically-connected consist regardless of which end the selected engine sits at. The real display name shown as "Model" is `Car.DefinitionInfo.Metadata.Name` — `Car.CarType` looks like it should be this but is actually just a short category code ("LS"/"LD" for any steam/diesel locomotive, regardless of specific class). The max-tonnage estimate is `TE / (8 + grade% × 20)`, a standard "ruling grade" tonnage-rating formula using the community rule-of-thumb 8 lbs/ton base resistance (rather than the nominal 3–5 lbs/ton for straight, level track) to account for curve resistance.
 - **Auto Engineer waypoints** resolve through `Model.AI.AutoEngineerPersistence(car.KeyValueObject).Orders` → `Graph.Shared.ResolveLocationString(...)` → `Graph.Shared.GetPositionRotation(location).Position`. The **Waypoint Queue** mod's own full queue, when installed, is read entirely via reflection (`WaypointQueueBridge.cs`) — this project has no compile-time dependency on that mod, so it degrades cleanly (just without queued-waypoint icons) if it isn't present. Its `ManagedWaypoint.StatusLabel` only ever reflects LIVE execution state (`"Inactive"` for anything not currently active), so the popup's "what's it actually configured to do" summary is instead translated from a wider set of the waypoint's own settings (coupling/uncoupling mode, refuel target, wait duration, speed change, etc.).

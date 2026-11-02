@@ -40,6 +40,16 @@ namespace RailroaderMinimapServer.Data
         // track comes separately, via TrackConditionUpdateDto.
         public int speedLimit { get; set; }
 
+        // Degrees of curve at this segment's sharpest point (whole degrees;
+        // 0 = tangent/straight), as computed by the game itself.
+        public int curvature { get; set; }
+
+        // MPH the Auto Engineer holds itself to on this segment because of
+        // its curvature, for standard equipment -- already capped at
+        // speedLimit, so it only differs from it on curves sharp enough to
+        // matter.
+        public int curveSpeedLimit { get; set; }
+
         // Each entry is [x, z, gradePercent] in world coordinates -- gradePercent
         // is the track's grade (%) at that specific point (matching
         // Graph.GradeAtLocation's own formula), used for the client's

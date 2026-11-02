@@ -526,6 +526,18 @@ after a game update, these are the exact APIs to re-verify first.
   `Dictionary<string, PropertyInfo>` of ManagedWaypoint's public properties
   built once, rather than one hand-declared `PropertyInfo` field per
   property.
+- **Curvature** -- `Graph.Shared.CurvatureOfSegment(segment)` (public): degrees
+  of curve, the max of five evenly spaced samples along the segment
+  (`TrackMath.CalculateCurveDegrees` between consecutive sample points),
+  each rounded to a whole byte and cached per segment id by the Graph.
+  `CurvatureAtLocation(location)` gives the sample at a point.
+  `TrainMath.MaximumSpeedMphForCurve(deg)` is `143 * deg^-0.57`;
+  `TrainMath.CalculateMaxSpeedMph(graph, segment, equipmentCurveLimit)`
+  (public extension, `Model.Physics`) is what `AutoEngineerPlanner` caps
+  itself to per segment: the curve speed less max(3 mph, 20%), rounded down
+  to 5 mph, at least 5, and capped at `EffectiveSpeedLimitMph`. Equipment
+  curve limit is `Car.MaximumTrackCurvature`; the game's own MoW estimates
+  pass 23 as a standard value, as does this mod.
 - **Maintenance of Way (2026.1)** -- `Game.Mow.TrackConditionController.
   Shared` (a `GameBehaviour`; its `Shared` getter does a
   `FindAnyObjectByType` whenever the cached one is null, so don't call it
@@ -689,6 +701,12 @@ after a game update, these are the exact APIs to re-verify first.
     (condition color ramp, thick = speed restricted), unbuilt track always
     dashed, and condition/max speed/construction progress in the tap-track
     popup.
+15. Curve labels (degrees of curve, one per curve at its sharpest segment,
+    culled by on-screen length and overlap, own "Curve Label Size"
+    slider), curvature/curve speed in the tap-track popup, and an
+    "Options" popout holding every map display setting (track color
+    modes, label toggles and sizes, Flip X/Z) so the header only has
+    actions.
 
 ## Known open items / not yet done
 

@@ -9,6 +9,7 @@ using Track;
 using Track.Signals; // CTCSignal, SignalAspect
 using UI.Map; // MapLabel
 using Model.Ops; // PassengerStop
+using Model.Physics; // TrainMath.CalculateMaxSpeedMph (curve speed)
 using RollingStock; // CarLoadTargetLoader
 
 namespace RailroaderMinimapServer
@@ -75,6 +76,27 @@ namespace RailroaderMinimapServer
                     // default" case (and caps at the railroad's own limit).
                     speedLimit = segment.EffectiveSpeedLimitMph
                 };
+
+                // Curvature in degrees of curve -- the game's own figure
+                // (Graph.CurvatureOfSegment: the sharpest of five evenly
+                // spaced samples, each rounded to a whole degree, cached by
+                // the Graph itself). The curve speed is what the Auto
+                // Engineer holds itself to on this segment
+                // (TrainMath.CalculateMaxSpeedMph, already capped at the
+                // signed limit), for standard equipment: 23 degrees is the
+                // equipment curve limit the game's own MoW traffic
+                // estimates assume, and only matters for curves sharper
+                // than that.
+                try
+                {
+                    segDto.curvature = Mathf.RoundToInt(graph.CurvatureOfSegment(segment));
+                    segDto.curveSpeedLimit = Mathf.RoundToInt(graph.CalculateMaxSpeedMph(segment, StandardEquipmentCurveLimitDegrees));
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"Could not compute curvature for segment '{segDto.id}': {ex.Message}");
+                    segDto.curveSpeedLimit = segDto.speedLimit;
+                }
 
                 // Sampled by DISTANCE (not curve parameter t) via TrackSegment's own
                 // GetPositionRotationAtDistance -- the same method the game itself uses
@@ -366,6 +388,8 @@ namespace RailroaderMinimapServer
                 Signals = signals
             };
         }
+
+        private const float StandardEquipmentCurveLimitDegrees = 23f;
 
         // Also used by MinimapServerCore's track-condition messages, which
         // must key segments exactly the way SegmentDto.id does.

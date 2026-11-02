@@ -22,6 +22,7 @@
     --signal-lunar: #cfd6d2;
     --freight-idle: #8a978f;
     --construction: #5aa9e6;
+    --curve-label: #c9b6ff;
   }
 
   * { box-sizing: border-box; }
@@ -225,6 +226,51 @@
     overflow: hidden;
   }
   .engine-pane.hidden { display: none; }
+
+  /* Map display options, popped out from the header's Options button so
+     the header only holds actions. Floats over the top-right of the map
+     (temporarily covering the message feed while open). */
+  .options-panel {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 20;
+    width: min(300px, calc(100% - 24px));
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+    background: rgba(15, 22, 20, 0.97);
+    border: 1px solid var(--panel-line);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-size: 12px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  .options-panel[hidden] { display: none; }
+  .options-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+    border-bottom: 1px solid var(--panel-line);
+  }
+  .options-panel-header button { padding: 0 8px; font-size: 14px; line-height: 20px; }
+  .options-section { padding: 8px 10px 10px; border-bottom: 1px solid var(--panel-line); }
+  .options-section:last-child { border-bottom: none; }
+  .options-section-title {
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+  }
+  .options-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+  .options-panel .ui-scale-control { justify-content: space-between; margin-top: 6px; }
+  .options-panel .ui-scale-control label { flex: 0 0 112px; }
+  .options-panel .ui-scale-control input[type="range"] { flex: 1; width: auto; min-width: 0; }
+  .options-hint { margin-top: 6px; font-size: 11px; line-height: 1.35; }
   .engine-pane-header {
     padding: 8px 10px;
     font-weight: 600;
@@ -409,26 +455,13 @@
   <span class="title">RAILROADER MINIMAP</span>
   <button id="connectBtn">Reconnect</button>
   <button id="trackBtn" disabled>Refresh Track Data</button>
-  <button id="flipXBtn">Flip X</button>
-  <button id="flipZBtn">Flip Z</button>
-  <button id="gradeColorBtn" title="Color track by grade % instead of the plain track color">Grade Color</button>
-  <button id="conditionColorBtn" title="Color track by Maintenance of Way condition; thick lines are under a speed restriction">Track Condition</button>
   <button id="zoomInBtn">Zoom In</button>
   <button id="zoomOutBtn">Zoom Out</button>
   <button id="resetViewBtn">Reset View</button>
   <button id="pinEnginesBtn">Pin Engine Info</button>
   <button id="enginePaneBtn">Engine Info</button>
   <button id="diagBtn">Diagnostics</button>
-  <span class="ui-scale-control" title="Scale up train labels, popups, and the legend">
-    <label for="uiScaleSlider">Text Size</label>
-    <input type="range" id="uiScaleSlider" min="1" max="2" step="0.1" value="1">
-    <span id="uiScaleValue" class="value-readout">100%</span>
-  </span>
-  <span class="ui-scale-control" title="Scale the area (yard/industry/interchange) name labels">
-    <label for="areaLabelScaleSlider">Area Label Size</label>
-    <input type="range" id="areaLabelScaleSlider" min="0.5" max="3" step="0.1" value="1">
-    <span id="areaLabelScaleValue" class="value-readout">100%</span>
-  </span>
+  <button id="optionsBtn" title="Map display options: track coloring, labels and their sizes, orientation">Options</button>
   <span style="margin-left:auto; color: var(--text-dim);">
     <span class="status-dot" id="statusDot"></span><span id="statusText">connecting…</span>
   </span>
@@ -443,6 +476,48 @@
       <div class="context-menu-item" id="warpCameraItem">📷 Warp camera here</div>
     </div>
     <div class="message-feed" id="messageFeed"></div>
+    <div class="options-panel" id="optionsPanel" hidden>
+      <div class="options-panel-header">
+        <span>OPTIONS</span>
+        <button id="optionsCloseBtn" title="Close">×</button>
+      </div>
+      <div class="options-section">
+        <div class="options-section-title">TRACK COLOR</div>
+        <div class="options-buttons">
+          <button id="gradeColorBtn" title="Color track by grade % instead of the plain track color">Grade Color</button>
+          <button id="conditionColorBtn" title="Color track by Maintenance of Way condition; thick lines are under a speed restriction">Track Condition</button>
+        </div>
+      </div>
+      <div class="options-section">
+        <div class="options-section-title">LABELS</div>
+        <div class="options-buttons">
+          <button id="curveLabelsBtn" title="Label curves with their curvature in degrees of curve">Curve Labels</button>
+        </div>
+        <span class="ui-scale-control" title="Scale up train labels, popups, and the legend">
+          <label for="uiScaleSlider">Text Size</label>
+          <input type="range" id="uiScaleSlider" min="1" max="2" step="0.1" value="1">
+          <span id="uiScaleValue" class="value-readout">100%</span>
+        </span>
+        <span class="ui-scale-control" title="Scale the area (yard/industry/interchange) name labels">
+          <label for="areaLabelScaleSlider">Area Label Size</label>
+          <input type="range" id="areaLabelScaleSlider" min="0.5" max="3" step="0.1" value="1">
+          <span id="areaLabelScaleValue" class="value-readout">100%</span>
+        </span>
+        <span class="ui-scale-control" title="Scale the curve (degrees of curve) labels">
+          <label for="curveLabelScaleSlider">Curve Label Size</label>
+          <input type="range" id="curveLabelScaleSlider" min="0.5" max="3" step="0.1" value="1">
+          <span id="curveLabelScaleValue" class="value-readout">100%</span>
+        </span>
+        <div class="options-hint">Curve labels show degrees of curve, the unit the game itself uses. Zoom in to see labels on shorter curves.</div>
+      </div>
+      <div class="options-section">
+        <div class="options-section-title">ORIENTATION</div>
+        <div class="options-buttons">
+          <button id="flipXBtn">Flip X</button>
+          <button id="flipZBtn">Flip Z</button>
+        </div>
+      </div>
+    </div>
     <div class="engine-pane hidden" id="enginePane">
       <div class="engine-pane-header">ENGINE INFO</div>
       <div class="engine-pane-body">
@@ -502,6 +577,12 @@
   const flipZBtn = $('flipZBtn');
   const gradeColorBtn = $('gradeColorBtn');
   const conditionColorBtn = $('conditionColorBtn');
+  const curveLabelsBtn = $('curveLabelsBtn');
+  const curveLabelScaleSlider = $('curveLabelScaleSlider');
+  const curveLabelScaleValue = $('curveLabelScaleValue');
+  const optionsBtn = $('optionsBtn');
+  const optionsPanel = $('optionsPanel');
+  const optionsCloseBtn = $('optionsCloseBtn');
   const zoomInBtn = $('zoomInBtn');
   const zoomOutBtn = $('zoomOutBtn');
   const resetViewBtn = $('resetViewBtn');
@@ -576,6 +657,9 @@
   // Empty until the server sends one, in which case the map draws exactly
   // as it did before MoW existed.
   const trackCondition = new Map();
+  // Curves to label, rebuilt whenever a track_network arrives (see
+  // buildCurveGroups): [{degrees, x, z, length}], sharpest first.
+  let curveGroups = [];
 
   // Transient car-status flashes ("just arrived" / "new destination
   // assigned") -- carId -> {icon: 'Spotted'|'Destination', expiresAt}.
@@ -691,6 +775,17 @@
       areaLabelScale = savedAreaScale;
     }
   } catch (e) { /* localStorage unavailable -- fine, just use the default */ }
+  // Curve (degrees of curve) labels: on/off plus their own size control,
+  // independent of the area labels and Text Size -- persisted the same way.
+  let curveLabelsEnabled = true;
+  let curveLabelScale = 1;
+  try {
+    curveLabelsEnabled = localStorage.getItem('minimapCurveLabels') !== 'false';
+    const savedCurveScale = parseFloat(localStorage.getItem('minimapCurveLabelScale'));
+    if (!isNaN(savedCurveScale) && savedCurveScale >= 0.5 && savedCurveScale <= 3) {
+      curveLabelScale = savedCurveScale;
+    }
+  } catch (e) { /* localStorage unavailable -- fine, just use the defaults */ }
   let baseScale = null; // the fit-to-window scale, used to clamp zoom range and compute the % readout
 
   function setStatus(state, text) {
@@ -813,6 +908,7 @@
             length: ps.length
           });
         }
+        curveGroups = buildCurveGroups(segments);
         transform = null; // recompute fit on next draw
         $('statSegments').textContent = segments.length;
         $('statSwitches').textContent = switches.size;
@@ -1245,6 +1341,74 @@
 
   function constructionNeeds(flags) {
     return CONSTRUCTION_NEEDS.filter(([bit]) => (flags & bit) !== 0).map(([, name]) => name);
+  }
+
+  // --- Curve labels ---
+  //
+  // A real curve is usually several short segments in a row, so labeling
+  // each segment would stamp the same number every few meters. Instead,
+  // consecutive curved segments are merged into one curve wherever they
+  // meet at a plain (non-switch) node, and each curve gets one label at its
+  // sharpest segment, showing that segment's degrees. At a switch the
+  // through and diverging routes stay separate curves.
+  const CURVE_LABEL_MIN_DEGREES = 2;     // 0-1 degree is effectively straight (and rounding noise)
+  const CURVE_LABEL_BASE_FONT_PX = 11;
+  const CURVE_LABEL_MIN_SCREEN_PX = 50;  // a curve shorter than this on screen isn't labeled -- zoom in to see it
+
+  function buildCurveGroups(segs) {
+    const nodeUse = new Map();
+    for (const seg of segs) {
+      nodeUse.set(seg.nodeA, (nodeUse.get(seg.nodeA) || 0) + 1);
+      nodeUse.set(seg.nodeB, (nodeUse.get(seg.nodeB) || 0) + 1);
+    }
+
+    const curved = segs.filter(seg => (seg.curvature || 0) >= CURVE_LABEL_MIN_DEGREES && seg.points && seg.points.length >= 2);
+    const parent = curved.map((_, i) => i);
+    const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    const byNode = new Map();
+    curved.forEach((seg, i) => {
+      for (const node of [seg.nodeA, seg.nodeB]) {
+        if (nodeUse.get(node) !== 2) continue; // switch or dead end: don't merge across it
+        if (byNode.has(node)) parent[find(i)] = find(byNode.get(node));
+        else byNode.set(node, i);
+      }
+    });
+
+    const groups = new Map();
+    curved.forEach((seg, i) => {
+      const root = find(i);
+      let g = groups.get(root);
+      if (!g) groups.set(root, g = { degrees: 0, sharpest: null, length: 0 });
+      g.length += seg.length || 0;
+      if (seg.curvature > g.degrees) { g.degrees = seg.curvature; g.sharpest = seg; }
+    });
+
+    return [...groups.values()].map(g => {
+      const mid = g.sharpest.points[Math.floor(g.sharpest.points.length / 2)];
+      return { degrees: g.degrees, x: mid[0], z: mid[1], length: g.length };
+    }).sort((a, b) => b.degrees - a.degrees);
+  }
+
+  function drawCurveLabels() {
+    if (!curveLabelsEnabled || !transform) return;
+    const fontPx = CURVE_LABEL_BASE_FONT_PX * curveLabelScale;
+    const placed = []; // screen rects already used -- sharpest curves claim their spot first
+    const rect = canvas.parentElement.getBoundingClientRect();
+    ctx.save();
+    ctx.font = `${fontPx}px "JetBrains Mono", monospace`;
+    for (const g of curveGroups) {
+      if (g.length * transform.scale < CURVE_LABEL_MIN_SCREEN_PX) continue;
+      const [sx, sz] = toScreen(g.x, g.z);
+      if (sx < -50 || sz < -50 || sx > rect.width + 50 || sz > rect.height + 50) continue;
+      const text = g.degrees + '°';
+      const w = ctx.measureText(text).width + fontPx * 0.8;
+      const h = fontPx * 1.4;
+      const box = { l: sx - w / 2, r: sx + w / 2, t: sz - h / 2, b: sz + h / 2 };
+      if (placed.some(o => box.l < o.r && box.r > o.l && box.t < o.b && box.b > o.t)) continue;
+      placed.push(box);
+      drawLabel(sx, sz, text, fontPx, cssVar('--curve-label'));
+    }
+    ctx.restore();
   }
 
   function strokeSegmentPolyline(seg) {
@@ -1873,6 +2037,9 @@
       }
     }
 
+    // Curve labels sit above the track and icons but under the area names.
+    drawCurveLabels();
+
     // Area (yard/industry/interchange) name labels -- drawn last, after
     // every other icon/label, so they always render on top instead of
     // potentially being buried under track/switch/signal/car icons.
@@ -2148,7 +2315,7 @@
             const g1 = p1[2] || 0, g2 = p2[2] || 0;
             best = {
               kind: 'track',
-              item: { id: seg.id, grade: g1 + (g2 - g1) * t, speedLimit: seg.speedLimit },
+              item: { id: seg.id, grade: g1 + (g2 - g1) * t, speedLimit: seg.speedLimit, curvature: seg.curvature, curveSpeedLimit: seg.curveSpeedLimit },
               sx: sx1 + (sx2 - sx1) * t,
               sz: sz1 + (sz2 - sz1) * t
             };
@@ -2248,6 +2415,16 @@
   function trackPopupHtml(t) {
     let html = `<div class="title">Track</div>` +
       `<div class="row"><span class="k">Grade</span><span>${Math.abs(t.grade).toFixed(1)}%</span></div>`;
+
+    // Curvature is the segment's sharpest point. Curve speed only shown when
+    // it's actually what limits speed here (it's already capped at the
+    // signed limit server-side).
+    if (t.curvature != null) {
+      html += detailRow('Curvature', t.curvature > 0 ? `${t.curvature}°` : 'Straight');
+      if (t.curveSpeedLimit > 0 && t.speedLimit > 0 && t.curveSpeedLimit < t.speedLimit) {
+        html += detailRow('Curve speed', `${t.curveSpeedLimit} mph (Auto Engineer)`);
+      }
+    }
 
     // Maintenance of Way details, worded like the game's own track tooltip.
     const c = trackCondition.get(t.id);
@@ -2694,6 +2871,51 @@
     } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
   });
 
+  // --- Options popout ---
+  function setOptionsOpen(open) {
+    optionsPanel.hidden = !open;
+    optionsBtn.classList.toggle('active', open);
+  }
+  optionsBtn.addEventListener('click', () => setOptionsOpen(optionsPanel.hidden));
+  optionsCloseBtn.addEventListener('click', () => setOptionsOpen(false));
+  // Close on any press outside the panel (e.g. starting to pan the map),
+  // or Escape -- but not on presses inside it, like dragging a slider.
+  document.addEventListener('pointerdown', (e) => {
+    if (optionsPanel.hidden) return;
+    if (optionsPanel.contains(e.target) || optionsBtn.contains(e.target)) return;
+    setOptionsOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !optionsPanel.hidden) setOptionsOpen(false);
+  });
+
+  curveLabelsBtn.classList.toggle('active', curveLabelsEnabled);
+  curveLabelsBtn.addEventListener('click', () => {
+    curveLabelsEnabled = !curveLabelsEnabled;
+    curveLabelsBtn.classList.toggle('active', curveLabelsEnabled);
+    try {
+      localStorage.setItem('minimapCurveLabels', String(curveLabelsEnabled));
+    } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
+    draw();
+  });
+
+  function applyCurveLabelScale(scale) {
+    curveLabelScale = scale;
+    curveLabelScaleValue.textContent = Math.round(scale * 100) + '%';
+    draw(); // canvas-drawn labels need an explicit redraw
+  }
+
+  curveLabelScaleSlider.value = String(curveLabelScale);
+  applyCurveLabelScale(curveLabelScale);
+
+  curveLabelScaleSlider.addEventListener('input', () => {
+    const scale = parseFloat(curveLabelScaleSlider.value);
+    applyCurveLabelScale(scale);
+    try {
+      localStorage.setItem('minimapCurveLabelScale', String(scale));
+    } catch (e) { /* localStorage unavailable -- setting still applies for this session */ }
+  });
+
   function applyAreaLabelScale(scale) {
     areaLabelScale = scale;
     areaLabelScaleValue.textContent = Math.round(scale * 100) + '%';
@@ -2808,6 +3030,8 @@
       text: 'signal — middle lamp lit = Approach' },
     { draw: (cx, cy) => drawSignalIcon(cx, cy, 'Stop'),
       text: 'signal — bottom lamp lit = Stop (diverging aspects share these lamps; Restricting shows lunar white on bottom)' },
+    { draw: (cx, cy) => drawLabel(cx, cy, '8°', 10, cssVar('--curve-label')),
+      text: 'curve label — degrees of curve at its sharpest point (Options > Curve Labels; zoom in for shorter curves)' },
     { note: 'large text — yard/industry/interchange area name' },
     { draw: (cx, cy) => drawServicePointIcon(cx, cy, 'Water'), text: 'water supply point' },
     { draw: (cx, cy) => drawServicePointIcon(cx, cy, 'Coal'), text: 'coal supply point' },
@@ -2827,7 +3051,7 @@
     { draw: (cx, cy) => drawSpottedGlyph(cx, cy, STATUS_BADGE_RADIUS),
       text: 'car spotted at destination (badge/label/message fade after a few seconds)' },
     { note: 'car name label recolors to match the active alert; engines\' always-shown label does the same' },
-    { note: 'tap a car, switch, signal, or waypoint arrow for details; tap bare track for its grade and condition' },
+    { note: 'tap a car, switch, signal, or waypoint arrow for details; tap bare track for its grade, curvature, and condition' },
     { note: 'right-click (or long-press) anywhere on the map to warp the in-game camera there' },
   ];
 
