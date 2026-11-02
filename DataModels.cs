@@ -283,10 +283,9 @@ namespace RailroaderMinimapServer.Data
         // otherwise.
         public string nearestAreaName { get; set; }
 
-        // Car.Weight (empty + current load), in pounds. Sent for every car
-        // (cheap property read) since it feeds the engine panel's gross
-        // train weight even for non-locomotive cars, not just the
-        // locomotive itself.
+        // Car.Weight (empty + every load slot, including a locomotive's or
+        // tender's fuel/water/coal), in pounds. Sent for every car (cheap
+        // property read).
         public float weight { get; set; }
 
         // Car.Condition, 0-1 (repair state). Sent for every car.
@@ -310,9 +309,12 @@ namespace RailroaderMinimapServer.Data
         // cars only, matching how a railroader would say "a 40-car train").
         public int? trainCarCount { get; set; }
 
-        // Total weight (tons) of every car in the coupled train, including
-        // locomotives and tenders.
-        public float? trainGrossWeightTons { get; set; }
+        // Consist weight (tons): every car in the coupled train, including
+        // this engine, its tender, and every other locomotive, each with its
+        // fuel/water/cargo. Rounded up to whole tons the same way the game's
+        // own HUD does, so the two match. Unlike trainCarCount, this is never
+        // zero for a locomotive -- a light engine still has a consist.
+        public float? consistWeightTons { get; set; }
 
         // Sum of RatedTractiveEffort across every locomotive in the coupled
         // train (this one included).

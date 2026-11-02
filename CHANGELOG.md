@@ -16,6 +16,7 @@ Version 0.10.0 (already set in `Info.json` and `PluginVersion`). Requires Railro
 
 ### Changed
 
+- Engine Info panel: "Gross weight" is now **Consist Weight**, and it's shown even for a light engine with no cars attached. The engine, its tender, and their fuel/water/coal are always counted, and it's rounded up to whole tons the same way the game's own HUD rounds its tonnage, so the two match
 - Loads through Railroader's built-in mod loader instead of Unity Mod Manager. Install into `Documents\Railroader\Mods\RailroaderMinimapServer`, turn on Preferences > Experimental > "Allow Unsafe DLL Mods", and enable the mod in the game's Mods screen. It's a client-scoped mod: not recorded in saves, not required of other multiplayer players
 - The mod is now a single DLL plus `Info.json`: it uses the WebSocketSharp library that now ships with the game instead of bundling its own copy, and no longer uses Harmony (which only exists in a game install when another mod loader put it there)
 - Rebuilt against Railroader 2026.1's reorganized game code (`Railroader.dll` replaces `Assembly-CSharp.dll`/`Definition.dll`; `CarType` replaces `CarArchetype`; track nodes, segments, passenger stops, and loads are no longer Unity objects; console commands use the new attribute-based system; game events moved to `EventBus`)

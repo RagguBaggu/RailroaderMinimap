@@ -483,7 +483,7 @@ namespace RailroaderMinimapServer
                 // Only resolved for locomotives -- EnumerateCoupled walks the
                 // whole train, not worth paying for on every freight/passenger
                 // car when the engine panel is the only current consumer.
-                (string locomotiveType, float? ratedTractiveEffort, int? trainCarCount, float? trainGrossWeightTons, float? trainCombinedTractiveEffort) =
+                (string locomotiveType, float? ratedTractiveEffort, int? trainCarCount, float? consistWeightTons, float? trainCombinedTractiveEffort) =
                     isLoco ? GetLocomotiveTrainInfo(car) : (null, null, null, null, null);
 
                 // Also locomotive-only -- resolving Auto Engineer waypoint
@@ -562,7 +562,7 @@ namespace RailroaderMinimapServer
                         locomotiveType = locomotiveType,
                         ratedTractiveEffort = ratedTractiveEffort,
                         trainCarCount = trainCarCount,
-                        trainGrossWeightTons = trainGrossWeightTons,
+                        consistWeightTons = consistWeightTons,
                         trainCombinedTractiveEffort = trainCombinedTractiveEffort,
                         autoEngineerWaypoint = autoEngineerWaypoint,
                         queuedWaypoints = queuedWaypoints
@@ -606,7 +606,7 @@ namespace RailroaderMinimapServer
                         locomotiveType = locomotiveType,
                         ratedTractiveEffort = ratedTractiveEffort,
                         trainCarCount = trainCarCount,
-                        trainGrossWeightTons = trainGrossWeightTons,
+                        consistWeightTons = consistWeightTons,
                         trainCombinedTractiveEffort = trainCombinedTractiveEffort,
                         autoEngineerWaypoint = autoEngineerWaypoint,
                         queuedWaypoints = queuedWaypoints
@@ -745,8 +745,8 @@ namespace RailroaderMinimapServer
         }
 
         // Locomotive-only info for the engine panel: type, rated tractive
-        // effort, and whole-train aggregates (combined TE, car count, gross
-        // weight). Returns all-null fields for a non-locomotive car.
+        // effort, and whole-train aggregates (combined TE, car count,
+        // consist weight). Returns all-null fields for a non-locomotive car.
         //
         // Car.EnumerateCoupled() walks the FULL physically-connected consist
         // regardless of which end this car sits at or how it's oriented
@@ -754,7 +754,7 @@ namespace RailroaderMinimapServer
         // it finds the true start of the connected chain first, then walks to
         // the end) -- a single default-direction call already returns the
         // entire train, no need to also walk the opposite LogicalEnd.
-        private static (string locomotiveType, float? ratedTractiveEffort, int? trainCarCount, float? trainGrossWeightTons, float? trainCombinedTractiveEffort) GetLocomotiveTrainInfo(Car car)
+        private static (string locomotiveType, float? ratedTractiveEffort, int? trainCarCount, float? consistWeightTons, float? trainCombinedTractiveEffort) GetLocomotiveTrainInfo(Car car)
         {
             if (!(car is BaseLocomotive loco)) return (null, null, null, null, null);
 
@@ -764,16 +764,42 @@ namespace RailroaderMinimapServer
 
             float ratedTE = loco.RatedTractiveEffort;
 
+            // The consist: this engine, its tender, and everything coupled to
+            // them, each counted once. EnumerateCoupled() already includes
+            // the engine itself and its tender (it's the same walk the game's
+            // own HUD tonnage uses), but they're added explicitly too so the
+            // engine and tender always count even if that walk fails or
+            // returns nothing (e.g. a car with no integration set yet).
+            var consist = new HashSet<Car> { car };
+            try
+            {
+                Car tender = car.CoupledTo(Car.LogicalEnd.A);
+                if (tender == null || !tender.CarType.IsTender) tender = car.CoupledTo(Car.LogicalEnd.B);
+                if (tender != null && tender.CarType.IsTender) consist.Add(tender);
+
+                foreach (var member in car.EnumerateCoupled())
+                {
+                    if (member != null) consist.Add(member);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Could not enumerate coupled train for '{GetStableCarId(car)}': {ex.Message}");
+            }
+
             int carCount = 0;
-            float grossWeightLbs = 0f;
+            float consistWeightLbs = 0f;
             float combinedTE = 0f;
             try
             {
-                foreach (var member in car.EnumerateCoupled())
+                foreach (var member in consist)
                 {
-                    if (member == null) continue;
-
-                    grossWeightLbs += member.Weight;
+                    // Car.Weight is empty weight plus every load slot, and a
+                    // locomotive's or tender's fuel, water, and coal are load
+                    // slots like any other cargo -- so this already includes
+                    // them (decompiled: Weight => WeightEmpty + _loadWeight,
+                    // summed over all LoadSlots via Load.Pounds).
+                    consistWeightLbs += member.Weight;
 
                     if (member.IsLocomotive)
                     {
@@ -790,12 +816,14 @@ namespace RailroaderMinimapServer
             }
             catch (Exception ex)
             {
-                Log.Warning($"Could not enumerate coupled train for '{GetStableCarId(car)}': {ex.Message}");
+                Log.Warning($"Could not total consist for '{GetStableCarId(car)}': {ex.Message}");
             }
 
-            // Car.Weight is in pounds (confirmed: the game's own GravityForce
-            // computation divides by 2000 to get tons) -- 2000 lbs/ton.
-            return (type, ratedTE, carCount, grossWeightLbs / 2000f, combinedTE);
+            // Car.Weight is in pounds; 2000 lbs/ton. Rounded up to whole
+            // tons from the summed pounds, exactly like the game's own HUD
+            // ("cars, tons" label -- LocomotiveControlsHoverArea.
+            // CalculateTonnage), so the two always show the same number.
+            return (type, ratedTE, carCount, Mathf.Ceil(consistWeightLbs / 2000f), combinedTE);
         }
 
         // Resolves this locomotive's Auto Engineer destinations to map

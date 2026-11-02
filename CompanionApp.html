@@ -2389,13 +2389,18 @@
       html += `<div class="note">Shown as arrow icons on the map while this engine is selected.</div>`;
     }
 
+    // Consist Weight is shown even for a light engine (no cars attached):
+    // the engine, its tender, and their fuel/water are still a consist,
+    // and its weight is what the game's own HUD reports in that case too.
     html += `<div class="title">Train</div>`;
     if ((car.trainCarCount || 0) > 0) {
       html += detailRow('Cars attached', String(car.trainCarCount));
       html += detailRow('Combined Tractive Effort', formatLbs(car.trainCombinedTractiveEffort));
-      html += detailRow('Gross weight', formatTons(car.trainGrossWeightTons));
     } else {
       html += `<div class="empty">Not coupled to any cars.</div>`;
+    }
+    if (car.consistWeightTons != null) {
+      html += detailRow('Consist Weight', formatTons(car.consistWeightTons));
     }
 
     // Combined TE already reduces to this engine's own rated TE when it's

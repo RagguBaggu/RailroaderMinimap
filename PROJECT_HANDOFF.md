@@ -662,7 +662,7 @@ after a game update, these are the exact APIs to re-verify first.
     tap-bare-track-for-grade popup.
 11. Engine Info panel: toggleable popout with a per-engine dropdown showing
     type/model/tractive effort/condition/fuel/status, whole-train aggregates
-    (car count, gross weight, combined tractive effort), and an approximate
+    (car count, consist weight, combined tractive effort), and an approximate
     max-tonnage calculation (`TE / (8 + grade% * 20)`) using the grade from
     the last-tapped point on the track.
 12. Auto Engineer waypoint visualization, scoped to the engine currently
